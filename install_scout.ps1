@@ -27,7 +27,7 @@ $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (Ne
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RunOnlyIfNetworkAvailable
 
 # Register it
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Description "LD2L S21 Scouting - Auto-updates player data every 2 hours" -RunLevel Highest
+Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Description "LD2L Scouting - Auto-updates player data every 2 hours" -RunLevel Highest
 
 # Run it immediately
 Start-ScheduledTask -TaskName $taskName
@@ -40,7 +40,7 @@ Write-Host ""
 Write-Host "  Task: $taskName"
 Write-Host "  Runs: Every 2 hours (started now)"
 Write-Host "  Log:  $scriptDir\scout_log.txt"
-Write-Host "  XLSX: $scriptDir\LD2L_S21_Scouting.xlsx"
+Write-Host "  Out:  $scriptDir\LD2L_S22_Scouting.xlsx + .html dashboard"
 Write-Host ""
 Write-Host "  To stop:  Run uninstall_scout.ps1"
 Write-Host "  To check: Open Task Scheduler > $taskName"
