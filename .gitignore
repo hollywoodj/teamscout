@@ -1,0 +1,6 @@
+*.xlsx
+*.html
+scout_log.txt
+cache/
+__pycache__/
+*.pyc
