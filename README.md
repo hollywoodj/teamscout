@@ -31,14 +31,15 @@ to the bid resolution). Estimates are a starting anchor, not a prediction —
 captains' own valuations, meta reads, and package deals move real prices.
 
 **Draft-day budget tracking**: captains get weighted budgets (lower-MMR captains
-get more). When the final budgets are announced, drop a `budgets.json` next to
-the script and re-run:
+get more). Budgets are scraped automatically from the season teams page
+(`/teams/{season}`, "Total Money" column) as soon as teams are posted — no setup
+needed. A `budgets.json` next to the script can override individual captains:
 
 ```json
-{ "Hollywood": 515, "Crypt1c": 310, "Coplice": 340 }
+{ "Hollywood": 515, "Crypt1c": 310 }
 ```
 
-The dashboard's Draft board then shows remaining budget per captain. During the
+The dashboard's Draft board shows remaining budget per captain. During the
 auction, mark a player drafted and enter the price paid + winning team in their
 row — budgets, market-spent totals, and best-available update live, and it all
 persists in localStorage across refreshes.

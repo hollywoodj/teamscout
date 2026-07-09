@@ -14,7 +14,7 @@ from .auction import annotate_players, load_history
 from .cache import Cache
 from .fetch import fetch_player_sections, signup_delta
 from .heroes import load_hero_map
-from .ld2l import scrape_signups
+from .ld2l import scrape_budgets, scrape_signups
 from .opendota import OpenDota
 from .report_html import generate_dashboard
 from .report_xlsx import generate_spreadsheet
@@ -66,12 +66,20 @@ def run_scout(args):
     print("\n" + "=" * 60)
     print("  Generating reports...")
     print("=" * 60)
+    # Team budgets: scraped from the season teams page ("Total Money") once
+    # teams are posted; budgets.json entries override scraped values.
     budgets = {}
+    teams = scrape_budgets(args.season)
+    if teams:
+        budgets = {t["captain"]: t["budget"] for t in teams if t["captain"]}
+        print(f"  💵 Team budgets from ld2l.org ({len(budgets)} teams): "
+              + ", ".join(f"{t['captain']} ${t['budget']}" for t in teams[:10]))
     if os.path.exists("budgets.json"):
         try:
             with open("budgets.json", encoding="utf-8") as f:
-                budgets = {str(k): int(v) for k, v in json.load(f).items()}
-            print(f"  💵 Team budgets loaded for {len(budgets)} captains (budgets.json)")
+                manual = {str(k): int(v) for k, v in json.load(f).items()}
+            budgets.update(manual)
+            print(f"  💵 budgets.json overrides applied for {len(manual)} captains")
         except (ValueError, OSError) as e:
             print(f"  ⚠ budgets.json ignored: {e}")
 

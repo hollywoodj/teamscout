@@ -9,6 +9,7 @@ Player name lives in the hovercard div's data-title; statement is the last <td>.
 """
 
 import re
+from html import unescape
 from html.parser import HTMLParser
 
 import requests
@@ -99,6 +100,39 @@ class SignupParser(HTMLParser):
             "pref_role": pref_role,
             "statement": statement,
         })
+
+
+def scrape_budgets(season_id):
+    """Scrape team budgets from the season teams page (/teams/{id}).
+
+    The table shows Captain (hovercard) plus "$Total Money" and "$Unspent"
+    columns. Returns [{captain, steam64, team, budget, unspent}], or [] until
+    teams are posted for the season.
+    """
+    url = f"{config.LD2L_BASE}/teams/{season_id}"
+    try:
+        r = requests.get(url, timeout=25, headers={"User-Agent": "ld2l-scout/2.0"})
+        r.raise_for_status()
+    except Exception as e:
+        print(f"  ⚠ Couldn't fetch teams page: {e}")
+        return []
+
+    teams = []
+    for row in re.findall(r"<tr>(.*?)</tr>", r.text, re.S):
+        cap = re.search(r'data-title="([^"]*)"', row)
+        sid = re.search(r'data-hovercard-id="(\d+)"', row)
+        name = re.search(r'href="/teams/about/\d+">([^<]*)', row)
+        money = re.findall(r"\$(\d+)", row)
+        if not (cap and money):
+            continue
+        teams.append({
+            "captain": unescape(cap.group(1)).strip(),
+            "steam64": int(sid.group(1)) if sid else None,
+            "team": unescape(name.group(1)).strip() if name else "",
+            "budget": int(money[0]),
+            "unspent": int(money[1]) if len(money) > 1 else None,
+        })
+    return teams
 
 
 def scrape_signups(season_id):
