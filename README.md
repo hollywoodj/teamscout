@@ -23,6 +23,13 @@ Optional: set `OPENDOTA_API_KEY` for faster/uncapped API access. Without it the
 tool paces itself for the free tier and reuses cached data (`cache/`): volatile
 stats refresh every 2h, heavy history every 24h, new signups fetch everything.
 
+**Auction values**: past auction drafts (last 4 auction seasons, cached weekly)
+feed two columns — *Last Cost* (what a returning player actually went for, or
+"captain"/"undrafted") and *Est. Cost* (median winning bid of the 7 nearest-MMR
+players across those seasons, normalized to the current auction base and rounded
+to the bid resolution). Estimates are a starting anchor, not a prediction —
+captains' own valuations, meta reads, and package deals move real prices.
+
 ## Background job (Windows)
 
 `install_scout.ps1` (run as admin) registers a Task Scheduler job that runs
@@ -41,6 +48,7 @@ scout/
   fetch.py         cache-aware fetching + signup delta detection
   heroes.py        dynamic hero map (OpenDota constants, bundled fallback)
   analysis.py      derived signals (lobby rank, lanes, solo/party, form, tiers)
+  auction.py       past auction-draft harvesting + cost estimation
   report_xlsx.py   Excel workbook
   report_html.py   HTML dashboard
   cli.py           argparse CLI + loop mode

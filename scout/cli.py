@@ -8,6 +8,7 @@ from datetime import datetime
 
 from . import config
 from .analysis import build_metrics
+from .auction import annotate_players, load_history
 from .cache import Cache
 from .fetch import fetch_player_sections, signup_delta
 from .heroes import load_hero_map
@@ -54,6 +55,9 @@ def run_scout(args):
         cached_note = "cache" if calls == 0 else f"{calls} calls"
         print(f"  [{i}/{len(players)}] {player['name']} ({player['mmr']} MMR) [{cached_note}]")
 
+    history = load_history(cache, args.season)
+    annotate_players(all_data, history)
+
     xlsx_out = args.output or f"LD2L_{season_label}_Scouting.xlsx"
     html_out = args.html or f"LD2L_{season_label}_Scouting.html"
 
@@ -72,6 +76,9 @@ def run_scout(args):
     print(f"  Active in last 30 days: {active}/{len(all_data)}")
     print(f"  With league games (6mo): {league_exp}")
     print(f"  Queueing above their medal: {punchers}")
+    returning = sum(1 for d in all_data if d["data"]["last_cost_season"])
+    print(f"  With past auction data: {returning} "
+          f"(from {len(history)} seasons of draft history)")
     print(f"  OpenDota API calls this run: {od.calls}")
     if od.calls >= config.DAILY_CALL_WARNING:
         print(f"  ⚠ Heavy API usage — free tier has a daily cap; consider OPENDOTA_API_KEY")

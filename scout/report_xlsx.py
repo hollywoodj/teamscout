@@ -54,6 +54,17 @@ def _sig_str(d):
                      for s in d["signature_heroes"])
 
 
+def _last_cost_str(d):
+    season = d["last_cost_season"]
+    if not season:
+        return "—"
+    if d["was_captain_last"]:
+        return f"captain ({season})"
+    if d["last_cost"] is not None:
+        return f"{d['last_cost']} ({season})"
+    return f"undrafted ({season})"
+
+
 def db_url(p):
     return f"https://www.dotabuff.com/players/{p['steam32']}"
 
@@ -78,6 +89,8 @@ def _board_columns():
         ("Listed MMR",           10,  lambda i, p, d: p["mmr"], False),
         ("OD Rank",              14,  lambda i, p, d: d["rank_str"], False),
         ("MMR Check",            20,  lambda i, p, d: d["mmr_check"], False),
+        ("Est. Cost",             9,  lambda i, p, d: d["est_cost"] if d["est_cost"] is not None else "—", False),
+        ("Last Cost",            18,  lambda i, p, d: _last_cost_str(d), False),
         ("Pos Prefs (1-5)",      13,  lambda i, p, d: "/".join(map(str, p["pos_prefs"])), False),
         ("Pref Pos",             10,  lambda i, p, d: p["pref_role"], False),
         ("Actual Lanes (6mo)",   24,  lambda i, p, d: d["lane_str"], False),
@@ -415,7 +428,8 @@ def _build_compare(ws):
         cell = ws.cell(row=3, column=c, value=h)
         cell.font, cell.fill = HDR_FONT, PatternFill("solid", fgColor="2D7D2D")
 
-    stats = ["Name", "Listed MMR", "OD Rank", "MMR Check", "Pos Prefs", "Actual Lanes",
+    stats = ["Name", "Listed MMR", "OD Rank", "MMR Check", "Est. Cost", "Last Cost",
+             "Pos Prefs", "Actual Lanes",
              "Win%", "Form 30d", "Total Games", "Recent KDA", "Avg GPM", "Avg XPM",
              "Heroes Played", "Last Active (days)", "Median Lobby Rank", "Punches Up?",
              "Solo WR", "League Games", "League Win%", "Top Hero #1", "Top Hero #2",

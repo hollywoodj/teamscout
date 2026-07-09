@@ -58,6 +58,11 @@ def _player_record(pd):
         "leagueWr": d["league_winrate"] if d["league_matches"] else None,
         "leagueHeroes": d["league_heroes"][:8],
         "tier": value_tier(p["mmr"], d),
+        "estCost": d["est_cost"],
+        "lastCost": d["last_cost"],
+        "lastCostSeason": d["last_cost_season"],
+        "lastDraftMmr": d["last_draft_mmr"],
+        "wasCaptainLast": d["was_captain_last"],
         "db": db_url(p),
         "od": od_url(p),
         "ld2l": ld2l_url(p),
@@ -271,6 +276,8 @@ const COLS = [
   {k:"mmr",   t:"MMR",    num:true,  sort:(a)=>a.mmr},
   {k:"rank",  t:"Medal",  num:false, sort:(a)=>a.rank},
   {k:"mmrCheck",t:"MMR check",num:false,sort:(a)=>a.mmrCheck},
+  {k:"estCost",t:"Est$",num:true,sort:(a)=>a.estCost==null?-1:a.estCost},
+  {k:"lastCost",t:"Last$",num:true,sort:(a)=>a.lastCost==null?-1:a.lastCost},
   {k:"prefRole",t:"Pref pos",num:false,sort:(a)=>a.prefRole},
   {k:"lanes", t:"Lanes (6mo)",num:false,sort:(a)=>-(a.laneN||0)},
   {k:"wr",    t:"WR%",    num:true,  sort:(a)=>a.wr},
@@ -321,6 +328,14 @@ function wrCell(v, games){
   return `<span class="${cls}">${v}</span>`;
 }
 
+function lastCostCell(p){
+  if (!p.lastCostSeason) return '<span class="dim">—</span>';
+  const t = `title="${esc(p.lastCostSeason)}${p.lastDraftMmr?" · MMR then "+p.lastDraftMmr:""}"`;
+  if (p.wasCaptainLast) return `<span class="dim" ${t}>capt</span>`;
+  if (p.lastCost==null) return `<span class="dim" ${t}>undrafted</span>`;
+  return `<span ${t}>${p.lastCost}</span>`;
+}
+
 function rowHtml(p){
   const dcls = drafted.has(p.id) ? "drafted" : "";
   const punch = p.punch ? ' <span class="good" title="queues above own medal">▲</span>' : '';
@@ -331,6 +346,8 @@ function rowHtml(p){
     <td class="num">${p.mmr}</td>
     <td>${esc(p.rank)}</td>
     <td>${mc}</td>
+    <td class="num">${p.estCost==null?'<span class="dim">—</span>':"~"+p.estCost}</td>
+    <td class="num">${lastCostCell(p)}</td>
     <td>${esc(p.prefRole)}</td>
     <td>${laneCell(p)}</td>
     <td class="num">${wrCell(p.wr, p.games)}</td>
@@ -359,6 +376,8 @@ function detailHtml(p){
     <div><h4>More</h4><p>Pos prefs: ${p.pos.join("/")} · Form 90d: ${esc(p.form90)||"—"} ·
       Solo WR: ${p.soloWr==null?"—":p.soloWr+"%"} · Party WR: ${p.partyWr==null?"—":p.partyWr+"%"} ·
       Hero pool: ${p.pool} · XPM: ${p.xpm} · MMR screenshot: ${p.mmrValid?"yes":"no"}</p></div>
+    <div><h4>Auction</h4><p>Est. cost: ${p.estCost==null?"—":"~"+p.estCost} ·
+      Last draft: ${p.lastCostSeason ? (p.wasCaptainLast?"captain":(p.lastCost==null?"undrafted":"cost "+p.lastCost)) + " (" + esc(p.lastCostSeason) + (p.lastDraftMmr?", MMR then "+p.lastDraftMmr:"") + ")" : "no history"}</p></div>
   </div></td></tr>`;
 }
 
@@ -422,7 +441,7 @@ function renderBest(){
     const cand = DATA.filter(p=>!drafted.has(p.id) && playsPos(p, ix+1))
                      .sort((a,b)=>b.mmr-a.mmr).slice(0,5);
     const rows = cand.length ? cand.map(p=>
-      `<div><span>${esc(p.name)}${p.captain==="Y"?" ©":""}</span><span class="m">${p.mmr}</span></div>`).join("")
+      `<div><span>${esc(p.name)}${p.captain==="Y"?" ©":""}</span><span class="m">${p.mmr}${p.estCost!=null?" · ~"+p.estCost:""}</span></div>`).join("")
       : '<div class="dim">none left</div>';
     return `<div class="bestcol"><h3>${nm}</h3>${rows}</div>`;
   }).join("");
@@ -441,6 +460,8 @@ function openCompare(){
   if (!sel.length) return;
   const stats = [
     ["MMR", p=>p.mmr], ["Medal", p=>esc(p.rank)], ["MMR check", p=>esc(p.mmrCheck)||"—"],
+    ["Est. cost", p=>p.estCost==null?"—":"~"+p.estCost],
+    ["Last cost", p=>lastCostCell(p)],
     ["Captain", p=>p.captain], ["Pos prefs", p=>p.pos.join("/")],
     ["Lanes", p=>laneCell(p)], ["Lifetime WR", p=>p.games?p.wr+"%":"—"],
     ["Form 30d", p=>esc(p.form30)||"—"], ["Form 90d", p=>esc(p.form90)||"—"],

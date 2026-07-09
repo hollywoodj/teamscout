@@ -92,6 +92,9 @@ def build_metrics(player, sections, hero_map):
         # real league history (leagueid > 0)
         "league_matches": 0, "league_wins": 0, "league_losses": 0,
         "league_winrate": 0, "league_heroes": [], "has_league_exp": False,
+        # auction history (filled in by auction.annotate_players)
+        "est_cost": None, "last_cost": None, "last_cost_season": None,
+        "last_draft_mmr": None, "was_captain_last": False,
     }
 
     # ---- profile / rank ----
@@ -280,6 +283,9 @@ def value_pick_signals(p, d):
         reasons.append(f"{d['league_matches']} league games in last 6mo ({d['league_winrate']}% WR)")
     if mmr <= 1000 and d["total_matches"] > 500:
         reasons.append(f"Listed at minimum MMR but {d['total_matches']} games played")
+    if d["last_draft_mmr"] and mmr and d["last_draft_mmr"] - mmr >= 300:
+        reasons.append(f"Listed {mmr} now vs {d['last_draft_mmr']} at their "
+                       f"{d['last_cost_season']} draft (-{d['last_draft_mmr'] - mmr})")
 
     if d["last_match_days"] is not None and d["last_match_days"] > 60:
         risks.append(f"Inactive {d['last_match_days']}d")
