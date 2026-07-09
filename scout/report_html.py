@@ -69,14 +69,16 @@ def _player_record(pd):
     }
 
 
-def generate_dashboard(players_with_data, output_file, season_label, season_id):
+def generate_dashboard(players_with_data, output_file, season_label, season_id, budgets=None):
     records = [_player_record(pd) for pd in
                sorted(players_with_data, key=lambda x: -x["player"]["mmr"])]
     payload = json.dumps(records, ensure_ascii=False).replace("</", "<\\/")
+    budgets_payload = json.dumps(budgets or {}, ensure_ascii=False).replace("</", "<\\/")
     html = (TEMPLATE
             .replace("{{SEASON}}", season_label)
             .replace("{{SEASON_ID}}", str(season_id))
             .replace("{{GENERATED}}", datetime.now().strftime("%Y-%m-%d %H:%M"))
+            .replace("{{BUDGETS}}", budgets_payload)
             .replace("{{DATA}}", payload))
     with open(output_file, "w", encoding="utf-8") as f:
         f.write(html)
@@ -159,7 +161,17 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .pname { font-weight: 600; cursor: pointer; }
 .pname:hover { text-decoration: underline; }
 tr.drafted td { opacity: .38; }
+tr.drafted td.draftcell { opacity: 1; }
 tr.drafted .pname { text-decoration: line-through; }
+.pricein { width: 54px; background: var(--surface); color: var(--ink);
+           border: 1px solid var(--grid); border-radius: 5px; padding: 2px 5px; font: inherit; font-size: 12px; }
+.teamsel { max-width: 110px; background: var(--surface); color: var(--ink);
+           border: 1px solid var(--grid); border-radius: 5px; padding: 2px 3px; font: inherit; font-size: 12px; }
+#budgetbar { margin-bottom: 10px; }
+.bchip { display: inline-block; border: 1px solid var(--grid); background: var(--surface);
+         border-radius: 6px; padding: 4px 9px; margin: 0 6px 6px 0; font-size: 12.5px; color: var(--ink2); }
+.bchip b { color: var(--ink); }
+.bchip.over b { color: var(--crit); }
 
 .badge {
   display: inline-block; font-size: 10px; font-weight: 700; border-radius: 4px;
@@ -246,7 +258,7 @@ tr.detail td { background: var(--page); white-space: normal; padding: 10px 16px;
   <span class="count" id="count"></span>
 </div>
 
-<div id="bestpanel"><div class="bestgrid" id="bestgrid"></div></div>
+<div id="bestpanel"><div id="budgetbar"></div><div class="bestgrid" id="bestgrid"></div></div>
 
 <div class="wrap"><table id="tbl">
   <thead><tr id="hdr"></tr></thead>
@@ -262,10 +274,23 @@ tr.detail td { background: var(--page); white-space: normal; padding: 10px 16px;
 
 <script>
 const DATA = {{DATA}};
+const BUDGETS = {{BUDGETS}};
 const SEASON = "{{SEASON_ID}}";
-const LSKEY = "ld2l-drafted-s" + SEASON;
+const LSKEY = "ld2l-draft2-s" + SEASON;
 
-let drafted = new Set(JSON.parse(localStorage.getItem(LSKEY) || "[]"));
+// draft state: {playerId: {p: pricePaid|null, t: winningCaptain|""}}
+let draftInfo = JSON.parse(localStorage.getItem(LSKEY) || "{}");
+// migrate v1 state (plain array of drafted ids)
+JSON.parse(localStorage.getItem("ld2l-drafted-s" + SEASON) || "[]").forEach(id=>{
+  if (!(id in draftInfo)) draftInfo[id] = {p: null, t: ""};
+});
+const isDrafted = id => id in draftInfo;
+const draftedCount = () => Object.keys(draftInfo).length;
+const saveDraft = () => localStorage.setItem(LSKEY, JSON.stringify(draftInfo));
+const CAPTAINS = Object.keys(BUDGETS).length
+  ? Object.keys(BUDGETS)
+  : DATA.filter(p=>p.captain==="Y").map(p=>p.name);
+
 let cmpSel = new Set();
 let posFilter = new Set();
 let sortCol = "mmr", sortDir = -1;
@@ -336,8 +361,21 @@ function lastCostCell(p){
   return `<span ${t}>${p.lastCost}</span>`;
 }
 
+function draftCell(p){
+  if (!isDrafted(p.id))
+    return `<button class="draftbtn" data-x="${p.id}">Draft</button>`;
+  const info = draftInfo[p.id];
+  const sel = CAPTAINS.length ? `<select class="teamsel" data-x="${p.id}">
+      <option value="">team?</option>
+      ${CAPTAINS.map(c=>`<option value="${esc(c)}" ${info.t===c?"selected":""}>${esc(c)}</option>`).join("")}
+    </select>` : "";
+  return `<button class="draftbtn on" data-x="${p.id}">Undo</button>
+    <input class="pricein" data-x="${p.id}" type="number" min="0" step="5"
+           placeholder="$" value="${info.p==null?"":info.p}" title="price paid">${sel}`;
+}
+
 function rowHtml(p){
-  const dcls = drafted.has(p.id) ? "drafted" : "";
+  const dcls = isDrafted(p.id) ? "drafted" : "";
   const punch = p.punch ? ' <span class="good" title="queues above own medal">▲</span>' : '';
   const mc = p.mmrCheck ? `<span class="${p.mmrCheck.startsWith("⚠")?"warn":"dim"}">${esc(p.mmrCheck)}</span>` : '<span class="dim">—</span>';
   return `<tr class="main ${dcls}" data-id="${p.id}">
@@ -361,7 +399,7 @@ function rowHtml(p){
     <td class="num">${p.leagueN ? `${p.leagueN} <span class="dim">(${p.leagueWr}%)</span>` : '<span class="dim">—</span>'}</td>
     <td><span class="tierchip">${esc(p.tier)}</span></td>
     <td><a href="${p.db}" target="_blank">DB</a> · <a href="${p.od}" target="_blank">OD</a> · <a href="${p.ld2l}" target="_blank">L2</a></td>
-    <td><button class="draftbtn ${drafted.has(p.id)?"on":""}" data-x="${p.id}">${drafted.has(p.id)?"Drafted":"Draft"}</button></td>
+    <td class="draftcell">${draftCell(p)}</td>
   </tr>`;
 }
 
@@ -392,7 +430,7 @@ function filtered(){
     if (cap && p.captain !== cap) return false;
     if (onlyNew && !p.new) return false;
     if (hideInactive && p.last!=null && p.last>90) return false;
-    if (hideDrafted && drafted.has(p.id)) return false;
+    if (hideDrafted && isDrafted(p.id)) return false;
     if (posFilter.size){
       let ok=false;
       posFilter.forEach(i=>{ if(playsPos(p,i)) ok=true; });
@@ -412,7 +450,7 @@ function render(){
     `<th class="${c.num?"num":""}" data-k="${c.k}">${c.t}${c.k===sortCol?` <span class="arr">${sortDir<0?"▼":"▲"}</span>`:""}</th>`).join("");
   document.getElementById("rows").innerHTML = list.map(rowHtml).join("");
   document.getElementById("count").textContent =
-    `${list.length}/${DATA.length} players · ${drafted.size} drafted`;
+    `${list.length}/${DATA.length} players · ${draftedCount()} drafted`;
   renderTiles(); renderBest(); renderTray();
 }
 
@@ -423,22 +461,51 @@ function renderTiles(){
   const active = DATA.filter(p=>p.last!=null && p.last<=30).length;
   const mmrs = DATA.map(p=>p.mmr).sort((a,b)=>a-b);
   const med = mmrs.length? mmrs[Math.floor(mmrs.length/2)] : 0;
-  document.getElementById("tiles").innerHTML = [
+  const spent = Object.values(draftInfo).reduce((s,i)=>s+(i.p||0), 0);
+  const tiles = [
     [DATA.length, "signups"],
     [capsY + " / " + capsM, "captains yes / maybe"],
     [news, "new since last run"],
     [active + "/" + DATA.length, "active last 30d"],
     [med, "median listed MMR"],
-    [DATA.length - drafted.size, "still available"],
-  ].map(([v,l])=>`<div class="tile"><div class="v">${v}</div><div class="l">${l}</div></div>`).join("");
+    [DATA.length - draftedCount(), "still available"],
+  ];
+  if (spent) tiles.push([spent, "market spent so far"]);
+  document.getElementById("tiles").innerHTML = tiles
+    .map(([v,l])=>`<div class="tile"><div class="v">${v}</div><div class="l">${l}</div></div>`).join("");
+}
+
+function renderBudgets(){
+  const bar = document.getElementById("budgetbar");
+  const spentBy = {}; let total = 0, unassigned = 0;
+  Object.values(draftInfo).forEach(i=>{
+    if (!i.p) return;
+    total += i.p;
+    if (i.t) spentBy[i.t] = (spentBy[i.t]||0) + i.p; else unassigned += i.p;
+  });
+  if (Object.keys(BUDGETS).length){
+    const chips = Object.entries(BUDGETS).map(([c,b])=>{
+      const left = b - (spentBy[c]||0);
+      return `<span class="bchip ${left<0?"over":""}">${esc(c)}: <b>${left}</b> / ${b}</span>`;
+    }).join("");
+    bar.innerHTML = chips
+      + `<span class="bchip">market spent: <b>${total}</b></span>`
+      + (unassigned ? `<span class="bchip over">unassigned: <b>${unassigned}</b></span>` : "");
+  } else if (total){
+    bar.innerHTML = `<span class="bchip">market spent: <b>${total}</b></span>`
+      + `<span class="dim" style="font-size:12px"> — add budgets.json ({"Captain": 500, ...}) and re-run to track per-team budgets</span>`;
+  } else {
+    bar.innerHTML = `<span class="dim" style="font-size:12px">Tip: after drafting a player, enter the price paid (and winning team) in their row — budgets and market totals update here. Provide budgets.json ({"Captain": 500, ...}) for per-team tracking.</span>`;
+  }
 }
 
 function renderBest(){
   const grid = document.getElementById("bestgrid");
   if (!document.getElementById("bestpanel").classList.contains("show")) return;
+  renderBudgets();
   const names = ["Pos 1 (Carry)","Pos 2 (Mid)","Pos 3 (Offlane)","Pos 4 (Soft)","Pos 5 (Hard)"];
   grid.innerHTML = names.map((nm,ix)=>{
-    const cand = DATA.filter(p=>!drafted.has(p.id) && playsPos(p, ix+1))
+    const cand = DATA.filter(p=>!isDrafted(p.id) && playsPos(p, ix+1))
                      .sort((a,b)=>b.mmr-a.mmr).slice(0,5);
     const rows = cand.length ? cand.map(p=>
       `<div><span>${esc(p.name)}${p.captain==="Y"?" ©":""}</span><span class="m">${p.mmr}${p.estCost!=null?" · ~"+p.estCost:""}</span></div>`).join("")
@@ -502,12 +569,26 @@ document.getElementById("hdr").addEventListener("click", e=>{
   if (sortCol===col.k) sortDir=-sortDir; else { sortCol=col.k; sortDir=-1; }
   render();
 });
+document.getElementById("rows").addEventListener("change", e=>{
+  const pi = e.target.closest(".pricein");
+  if (pi){
+    const id = +pi.dataset.x;
+    if (draftInfo[id]) draftInfo[id].p = pi.value === "" ? null : +pi.value;
+    saveDraft(); renderTiles(); renderBudgets(); return;
+  }
+  const ts = e.target.closest(".teamsel");
+  if (ts){
+    const id = +ts.dataset.x;
+    if (draftInfo[id]) draftInfo[id].t = ts.value;
+    saveDraft(); renderBudgets();
+  }
+});
 document.getElementById("rows").addEventListener("click", e=>{
   const dbtn = e.target.closest(".draftbtn");
   if (dbtn){
     const id = +dbtn.dataset.x;
-    drafted.has(id) ? drafted.delete(id) : drafted.add(id);
-    localStorage.setItem(LSKEY, JSON.stringify([...drafted]));
+    if (isDrafted(id)) delete draftInfo[id]; else draftInfo[id] = {p: null, t: ""};
+    saveDraft();
     render(); return;
   }
   const ck = e.target.closest(".cmpck");
@@ -534,8 +615,11 @@ document.getElementById("draftmode").addEventListener("click", e=>{
   sizeWrap();
 });
 document.getElementById("resetdraft").addEventListener("click", ()=>{
-  if (!drafted.size || confirm("Clear all " + drafted.size + " drafted marks?")){
-    drafted.clear(); localStorage.setItem(LSKEY, "[]"); render();
+  if (!draftedCount() || confirm("Clear all " + draftedCount() + " drafted marks (and their prices)?")){
+    draftInfo = {};
+    saveDraft();
+    localStorage.removeItem("ld2l-drafted-s" + SEASON);
+    render();
   }
 });
 document.getElementById("docmp").addEventListener("click", openCompare);

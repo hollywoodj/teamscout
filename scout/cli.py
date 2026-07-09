@@ -1,6 +1,8 @@
 """CLI entry point: orchestrates scrape -> fetch -> analyze -> reports."""
 
 import argparse
+import json
+import os
 import signal
 import sys
 import time
@@ -64,8 +66,17 @@ def run_scout(args):
     print("\n" + "=" * 60)
     print("  Generating reports...")
     print("=" * 60)
+    budgets = {}
+    if os.path.exists("budgets.json"):
+        try:
+            with open("budgets.json", encoding="utf-8") as f:
+                budgets = {str(k): int(v) for k, v in json.load(f).items()}
+            print(f"  💵 Team budgets loaded for {len(budgets)} captains (budgets.json)")
+        except (ValueError, OSError) as e:
+            print(f"  ⚠ budgets.json ignored: {e}")
+
     generate_spreadsheet(all_data, xlsx_out)
-    generate_dashboard(all_data, html_out, season_label, args.season)
+    generate_dashboard(all_data, html_out, season_label, args.season, budgets)
 
     active = sum(1 for d in all_data
                  if d["data"]["last_match_days"] is not None and d["data"]["last_match_days"] < 30)

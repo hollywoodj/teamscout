@@ -14,7 +14,7 @@ import requests
 
 from . import config
 
-HISTORY_BLOB = "auction_history"
+HISTORY_BLOB = "auction_history_v2"  # v2: rows carry team ids
 HISTORY_TTL_HOURS = 24 * 7
 MAX_SEASONS = 4   # how many past auction seasons feed the model
 KNN = 7           # nearest-by-MMR neighbours used for the estimate
@@ -40,12 +40,14 @@ class DraftParser(HTMLParser):
             except ValueError:
                 return
             cost_raw = a.get("data-cost", "")
-            has_team = a.get("data-team", "0") not in ("", "0")
+            team = a.get("data-team", "0")
+            has_team = team not in ("", "0")
             cost = int(cost_raw) if cost_raw.isdigit() and int(cost_raw) > 0 else None
             self.rows.append({
                 "steam32": steam32,
                 "mmr": mmr,
                 "cost": cost,
+                "team": team if has_team else None,
                 "captain": cost is None and has_team,
                 "drafted": a.get("data-drafted") == "1",
             })

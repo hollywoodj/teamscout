@@ -30,6 +30,19 @@ players across those seasons, normalized to the current auction base and rounded
 to the bid resolution). Estimates are a starting anchor, not a prediction —
 captains' own valuations, meta reads, and package deals move real prices.
 
+**Draft-day budget tracking**: captains get weighted budgets (lower-MMR captains
+get more). When the final budgets are announced, drop a `budgets.json` next to
+the script and re-run:
+
+```json
+{ "Hollywood": 515, "Crypt1c": 310, "Coplice": 340 }
+```
+
+The dashboard's Draft board then shows remaining budget per captain. During the
+auction, mark a player drafted and enter the price paid + winning team in their
+row — budgets, market-spent totals, and best-available update live, and it all
+persists in localStorage across refreshes.
+
 ## Background job (Windows)
 
 `install_scout.ps1` (run as admin) registers a Task Scheduler job that runs
