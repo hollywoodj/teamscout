@@ -3,12 +3,14 @@
 ' ------------------------------------------------------------
 '  Double-click to start the local practice auction. A console
 '  window shows the board URL + status, and the draft board
-'  opens in your browser automatically. Draft as Hollywood
-'  against the AI captains; press Ctrl+C in the console (or
-'  close the window) to stop. Targets are saved on exit.
+'  opens in your browser automatically. The finalized captain
+'  roster and budgets come directly from the LD2L teams page;
+'  roles and removals still come from captains.json. Draft as
+'  Hollywood against the AI captains; press Ctrl+C in the
+'  console (or close the window) to stop. Targets save on exit.
 '
-'  To draft from a different seat, add it to the command below,
-'  e.g.:  python ld2l_scout.py --mock --me "Some Captain"
+'  For preseason testing with a hand-curated roster, run:
+'  python ld2l_scout.py --mock --roster curated
 ' ============================================================
 
 Option Explicit
@@ -32,7 +34,7 @@ End If
 ' Set a friendly window title, launch the mock server in a visible
 ' console, and only keep the window open (pause) if Python exits with
 ' an error -- a clean Ctrl+C stop (exit 0) closes the window.
-cmd = "cmd /c title LD2L Mock Draft & python ld2l_scout.py --mock || pause"
+cmd = "cmd /c title LD2L Mock Draft & python ld2l_scout.py --mock --official-roster || pause"
 
 ' 1 = normal visible window, False = don't block this script.
 shell.Run cmd, 1, False

@@ -184,16 +184,24 @@ countdown), **Nominate** on your turn, and **+1 / +5 / +25** bid buttons. The ol
 standalone mock board is retired — one surface for both mock and live. (Regenerate
 the dashboard once — any normal scout run — so the Mock bar is present.)
 
-The **captains (the AI bidders) and all roles come from the dashboard, not the
-site** — the `⬇ Captains → mock` button in the dashboard header saves the
-captains *you* curated (the **C** button), their hand-set budgets, their full
-role sets, **and every player's role circles** to `captains.json`. Drop that
-file next to `ld2l_scout.py` and the mock uses exactly your board: your role
-circles are the primary signal for what positions each player can be drafted
-into (measured lanes only fill in for unmarked players), captains can flex
-across multiple roles, and regular players never end up bidding. Re-export
-after editing roles or captains. (A captain with no saved budget defaults to
-`$500`.)
+Mock roster authority is explicit:
+
+```powershell
+python ld2l_scout.py --mock --roster official
+python ld2l_scout.py --mock --roster curated
+```
+
+Use **official** after the draft roster is finalized. Captains, Steam IDs, team
+IDs and starting budgets come from the LD2L season teams page; a valid response
+is cached by season for offline fallback. `budgets.json` remains the intentional
+final override. `MockDraft.vbs` launches this mode.
+
+Use **curated** during preseason. The captains and starting budgets come from
+`captains.json`, with missing Steam IDs recovered from exact player-name
+matches. In both modes the `⬇ Captains → mock` export supplies your role circles
+and the players marked off the draft (⊘). That keeps the dashboard as the one
+scouting surface without letting an old export replace finalized website
+budgets.
 
 **Hero draft practice (`--herodraft`)**: practice the *in-game* Captains Mode
 pick/ban against the team you're about to face, at `http://localhost:8323/`,

@@ -5,12 +5,10 @@ Fully local and self-contained. Nothing is ever sent to ld2l.org.
   - The player pool is rebuilt from the last scout run's cache (same offline
     path as `--offline`), so every player carries the tool's skill / role /
     price estimates.
-  - Captains + budgets come from captains.json (exported from the dashboard —
-    the captains YOU curated), falling back to the signup captain:yes flag then
-    the scraped teams page. The captains are removed from the draftable pool,
-    as is anyone you marked ⊘ (off the draft) on the dashboard — that list rides
-    along in the same export, so a player can stay on your scouting board
-    without ever coming up for auction here.
+  - Captain and budget authority is explicit: curated mode uses captains.json
+    for preseason practice; official mode uses the finalized LD2L teams page
+    (with a season-scoped offline cache). Dashboard-exported roles and the ⊘
+    list apply in either mode.
   - A full English auction runs locally: a captain nominates a player, everyone
     bids up on a countdown, the highest bid wins. You (Hollywood by default)
     draft; the other seats are rational AI captains that value players by role
@@ -166,7 +164,6 @@ def _load_captains_file(all_data):
     if not isinstance(raw, list):
         return None, {}, removed
 
-    known = {pd["player"]["steam32"] for pd in all_data}
     rows = []
     for c in raw:
         if not isinstance(c, dict):
@@ -198,7 +195,6 @@ def _load_captains_file(all_data):
             "team_id": None,
             "budget": budget if budget is not None else config.MOCK_DEFAULT_BUDGET,
             "pos": pos,
-            "_known": s32 in known if s32 is not None else False,
         })
     if not rows:
         return None, {}, removed

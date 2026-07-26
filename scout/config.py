@@ -122,10 +122,10 @@ MOCK_BUYS = MOCK_TEAM_SIZE - 1   # players each captain buys in the auction (4)
 MOCK_DEFAULT_ME = "Hollywood"    # default human seat (changeable in the UI)
 MOCK_MIN_BID = 1            # opening / minimum bid ($)
 MOCK_BID_INCREMENT = 1      # smallest AI raise step ($), used near the top
-# Captains come from the dashboard: the "Export captains.json" button writes the
-# captains YOU curated (the C button) plus their hand-set budgets to this file.
-# The mock reads it as the authoritative captain/bidder list; if it's missing it
-# falls back to the scraped teams page (which can mis-tag roster players).
+# The dashboard export carries curated preseason captains/budgets plus roles and
+# removals. In official mock mode the finalized LD2L teams page owns captain
+# identity and budgets; this file still supplies the browser-curated role and
+# removal state.
 MOCK_CAPTAINS_FILE = "captains.json"
 MOCK_DEFAULT_BUDGET = 500   # $ for a captain with no budget in captains.json/teams
 # Real-auction bidding: people click the +1 button most of the time, +5 now and
