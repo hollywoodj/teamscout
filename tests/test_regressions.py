@@ -1,6 +1,9 @@
 import json
 import importlib.util
 import os
+import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -26,7 +29,7 @@ from scout.heroes import load_hero_map
 from scout.herodraft import load_meta
 from scout.herodraft_html import render_page
 from scout.live import LiveState
-from scout.mockdraft import MockState, _resolve_sale
+from scout.mockdraft import MockState, _next_nominator, _resolve_sale
 from scout.user_config import load_budget_overrides, load_target_sets
 
 
@@ -207,6 +210,20 @@ class MockAuctionTests(unittest.TestCase):
             team.slots_left * config.MOCK_RESERVE_PER_SLOT,
         )
         self.assertGreaterEqual(team.affordable(), config.MOCK_MIN_BID)
+
+    def test_lowest_starting_budget_nominates_first_with_stable_ties(self):
+        captains = [
+            {"captain": "High", "budget": 500, "team_id": "1", "pos": [1]},
+            {"captain": "Low A", "budget": 200, "team_id": "2", "pos": [2]},
+            {"captain": "Low B", "budget": 200, "team_id": "3", "pos": [3]},
+            {"captain": "Mid", "budget": 300, "team_id": "4", "pos": [4]},
+        ]
+        state = MockState(
+            53, "S22", [self.player()], captains, {}, "Low A"
+        )
+
+        self.assertEqual(state.order, ["Low A", "Low B", "Mid", "High"])
+        self.assertEqual(_next_nominator(state), "Low A")
 
 
 class MockRosterSourceTests(unittest.TestCase):
@@ -605,6 +622,52 @@ class PricingTests(unittest.TestCase):
         self.assertIn("checkPricing", page)          # JS self-check present
         self.assertIn("PRICING_VECTORS", page)        # fixture embedded
         self.assertNotIn("{{", page)                  # every marker filled in
+
+    def test_budget_bar_uses_remaining_money_only_in_mock_mode(self):
+        if importlib.util.find_spec("openpyxl") is None:
+            openpyxl = types.ModuleType("openpyxl")
+            styles = types.ModuleType("openpyxl.styles")
+            utils = types.ModuleType("openpyxl.utils")
+
+            def style_stub(*args, **kwargs):
+                return object()
+
+            openpyxl.Workbook = object
+            for name in ("Alignment", "Border", "Font", "PatternFill", "Side"):
+                setattr(styles, name, style_stub)
+            utils.get_column_letter = lambda n: str(n)
+            sys.modules["openpyxl"] = openpyxl
+            sys.modules["openpyxl.styles"] = styles
+            sys.modules["openpyxl.utils"] = utils
+
+        from scout import report_html
+
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is required to exercise dashboard JavaScript")
+        match = re.search(
+            r"function budgetBarState\(.*?^\}",
+            report_html.TEMPLATE,
+            re.MULTILINE | re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        script = match.group(0) + """
+const cases = [
+  budgetBarState(100, 0, true),
+  budgetBarState(100, 25, true),
+  budgetBarState(100, 100, true),
+  budgetBarState(100, 25, false),
+];
+process.stdout.write(JSON.stringify(cases));
+"""
+        got = json.loads(subprocess.check_output(
+            [node, "-e", script], text=True
+        ))
+
+        self.assertEqual([case["fillPct"] for case in got], [100, 75, 0, 25])
+        self.assertEqual(got[1]["percentText"], "75% remaining")
+        self.assertEqual(got[3]["percentText"], "25% used")
+        self.assertEqual(got[1]["title"], "remaining $75 of $100 (75%)")
 
     def test_budget_only_captain_maps_to_signup_steam_id(self):
         from scout.report_html import _captain_id_map

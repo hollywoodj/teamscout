@@ -597,6 +597,7 @@ class MockState:
             team.targets = saved.get(cap, set()) & set(self.pool)
             self.teams[cap] = team
             self.order.append(cap)
+        self.order.sort(key=lambda captain: self.teams[captain].start_budget)
         self.set_me(me, silent=True)
 
         # auction runtime

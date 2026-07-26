@@ -203,6 +203,10 @@ and the players marked off the draft (⊘). That keeps the dashboard as the one
 scouting surface without letting an old export replace finalized website
 budgets.
 
+Captains nominate from lowest to highest starting budget (source order breaks
+ties), and each mock team card's blue budget bar shows the share of starting
+money remaining.
+
 **Hero draft practice (`--herodraft`)**: practice the *in-game* Captains Mode
 pick/ban against the team you're about to face, at `http://localhost:8323/`,
 on a board **laid out like the Dota client** — your picks stack down one side,

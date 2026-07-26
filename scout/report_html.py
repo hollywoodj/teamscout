@@ -1566,6 +1566,21 @@ function needsFor(players){
   return [1,2,3,4,5].filter(pos=>!covered.has(pos));
 }
 
+function budgetBarState(budget, spent, mockMode){
+  if (budget == null) return null;
+  const left = budget - spent;
+  const rawPct = budget > 0
+    ? Math.round((mockMode ? left : spent) / budget * 100)
+    : 0;
+  const pct = mockMode ? Math.max(0, Math.min(100, rawPct)) : rawPct;
+  const fillPct = Math.max(0, Math.min(100, rawPct));
+  const percentText = `${pct}% ${mockMode ? "remaining" : "used"}`;
+  const title = mockMode
+    ? `remaining $${left} of $${budget} (${pct}%)`
+    : `spent $${spent} of $${budget} (${pct}%)`;
+  return {left, pct, fillPct, title, percentText};
+}
+
 function renderTeams(){
   if (!document.getElementById("teamspanel").classList.contains("show")) return;
   const byId = Object.fromEntries(DATA.map(p=>[p.id, p]));
@@ -1594,13 +1609,13 @@ function renderTeams(){
         + `<span class="rolecircles">${needs.map(pos=>`<span class="needcirc" title="${esc(NEED_LABEL[pos])}">${pos}</span>`).join("")}</span></div>`
       : '<div class="teamneeds full">Roster full — all 5 roles covered</div>';
     // money: budget (had to begin) vs spent, with a mini bar + remaining
-    const pct = budget ? Math.round(t.spent / budget * 100) : 0;
-    const bar = budget!=null
-      ? `<div class="moneybar ${over?"over":""}" title="spent $${t.spent} of $${budget} (${pct}%)"><i class="spent" style="width:${Math.min(100,pct)}%"></i></div>`
+    const budgetState = budgetBarState(budget, t.spent, MOCKMODE);
+    const bar = budgetState
+      ? `<div class="moneybar ${over?"over":""}" title="${budgetState.title}"><i class="spent" style="width:${budgetState.fillPct}%"></i></div>`
       : "";
     const money = `<div class="moneyrow">
         <span>Spent <b>$${t.spent}</b></span>
-        <span class="mleft ${over?"over":""}">Left <b>${budget!=null?"$"+left:"—"}</b>${budget?` <span class="dim">(${pct}% used)</span>`:""}</span>
+        <span class="mleft ${over?"over":""}">Left <b>${budget!=null?"$"+left:"—"}</b>${budget && budgetState?` <span class="dim">(${budgetState.percentText})</span>`:""}</span>
       </div>`;
     return `<div class="teamcard ${over?"over":""}">
       <h3><span>${esc(c)}</span><span class="bud">Budget <input class="budgetin" data-team="${esc(c)}" type="number" min="0" step="5" value="${budget!=null?budget:""}" placeholder="set $"></span></h3>
