@@ -293,6 +293,124 @@ table.idx td:first-child{font-weight:600}
 
 
 # ---------------------------------------------------------------- cards
+def _draft_recommendation_card(d):
+    score = d.get("draft_value_score")
+    rank = d.get("draft_value_rank")
+    confidence = d.get("draft_value_confidence") or "low"
+    fit = d.get("role_fit") or {}
+    best = fit.get("best")
+    secondary = fit.get("secondary") or []
+    role_text = POS_NAMES.get(best, "Unclear")
+    if secondary:
+        role_text += " Â· secondary " + ", ".join(
+            POS_NAMES.get(pos, f"Pos {pos}") for pos in secondary
+        )
+    edge = d.get("edge_cost")
+    edge_text = f"{edge:+d}" if edge is not None else "â€”"
+    channels = d.get("draft_value_channels") or {}
+    channel_rows = "".join(
+        f'<tr><td>{E(name.title())}</td><td class="num">{value}</td></tr>'
+        for name, value in channels.items()
+    )
+    score_text = "â€”" if score is None else str(score)
+    rank_text = "" if rank is None else f" Â· pool rank #{rank}"
+    evidence = "".join(
+        f"<li>{E(item)}</li>" for item in d.get("draft_value_evidence") or []
+    )
+    risks = "".join(
+        f"<li>{E(item)}</li>" for item in d.get("draft_value_risks") or []
+    )
+    return (
+        '<div class="card span2"><h2>Draft recommendation</h2>'
+        f'<div class="verdict {"good" if (score or 0) >= 65 else "warn"}">'
+        f'{score_text}/100{rank_text} Â· {E(confidence)} confidence</div>'
+        '<div class="esports-summary">'
+        f'<div class="esports-stat"><span>Best role</span><b>{E(role_text)}</b></div>'
+        f'<div class="esports-stat"><span>Auction edge</span><b>{edge_text}</b></div>'
+        f'<div class="esports-stat"><span>Role profile</span><b>{E(fit.get("label", "Unclear"))}</b></div>'
+        '</div>'
+        f'<p>{E(d.get("draft_value_verdict") or "Evidence is still limited.")}</p>'
+        '<div class="esports-summary">'
+        f'<div><h2>Strongest evidence</h2><ul>{evidence}</ul></div>'
+        f'<div><h2>Principal risks</h2><ul>{risks}</ul></div>'
+        '</div>'
+        f'<details class="why"><summary>Score channels</summary>'
+        f'<table class="kv">{channel_rows}</table></details></div>'
+    )
+
+
+def _vision_card(d):
+    vision_n = d.get("vision_n") or 0
+    deward_n = d.get("deward_n") or 0
+    if not vision_n and not deward_n:
+        return (
+            '<div class="card"><h2>Vision &amp; dewarding</h2>'
+            '<p class="dim">No parsed vision sample available.</p></div>'
+        )
+    rows = []
+    if d.get("sentry_per30") is not None:
+        rows.append(
+            f'<tr><td>Sentries purchased / 30</td>'
+            f'<td class="num">{d["sentry_per30"]}</td></tr>'
+        )
+    if d.get("observer_per30") is not None:
+        rows.append(
+            f'<tr><td>Observers purchased / 30</td>'
+            f'<td class="num">{d["observer_per30"]}</td></tr>'
+        )
+    if d.get("dewards_per30") is not None:
+        rows.extend([
+            f'<tr><td>Dewards / 30</td><td class="num">{d["dewards_per30"]}</td></tr>',
+            f'<tr><td>Observer wards destroyed / 30</td>'
+            f'<td class="num">{d["observer_kills_per30"]}</td></tr>',
+            f'<tr><td>Sentry wards destroyed / 30</td>'
+            f'<td class="num">{d["sentry_kills_per30"]}</td></tr>',
+        ])
+    return (
+        '<div class="card"><h2>Vision &amp; dewarding</h2>'
+        f'<table class="kv">{"".join(rows)}</table>'
+        f'<p class="note">Purchases: {vision_n} parsed matches. Successful '
+        f'dewards: {deward_n} recent full-match parses. Rates are normalized '
+        'to 30 minutes; purchases measure effort, destroyed wards measure '
+        'successful dewarding.</p></div>'
+    )
+
+
+def _requested_heroes_card(d):
+    rows = ""
+    for hero in d.get("requested_heroes") or []:
+        def record(prefix):
+            games = hero.get(f"{prefix}_games") or 0
+            wr = hero.get(f"{prefix}_wr")
+            return f"{games}g Â· {wr}%" if games and wr is not None else "â€”"
+        label = hero.get("label") or "No evidence"
+        cls = (
+            "good" if label == "Proven"
+            else "accent" if label == "Current"
+            else "warn" if label in ("Historical", "Tried")
+            else ""
+        )
+        rows += (
+            f'<tr><td>{E(hero["hero"])}</td>'
+            f'<td>{_chip(label, cls)}</td>'
+            f'<td class="num">{record("lifetime")}</td>'
+            f'<td class="num">{record("recent")}</td>'
+            f'<td class="num">{record("ticketed")}</td></tr>'
+        )
+    if not rows:
+        rows = '<tr><td class="dim" colspan="5">No hero data</td></tr>'
+    return (
+        '<div class="card span2"><h2>Requested hero fit</h2>'
+        '<div class="table-scroll"><table class="postbl"><thead><tr>'
+        '<th>Hero</th><th>Evidence</th><th class="num">Lifetime</th>'
+        '<th class="num">Recent 6mo</th><th class="num">Ticketed</th>'
+        f'</tr></thead><tbody>{rows}</tbody></table></div>'
+        '<p class="note">Proven requires a meaningful winning sample; Current '
+        'requires at least three games in the recent sample. One old game is '
+        'not treated as hero proficiency.</p></div>'
+    )
+
+
 def _winrate_card(d):
     rows = [_wr_row("Lifetime", d["winrate"] if d["total_matches"] else None,
                     d["total_matches"], d["wins"], d["losses"])]
@@ -394,6 +512,14 @@ def _esports_card(d):
     career_wr = d.get("esports_winrate")
     recent_wr = d.get("esports_6mo_winrate")
     summaries = [
+        (
+            "League proof",
+            (
+                f'{d.get("league_proof", {}).get("label", "Limited sample")} Â· '
+                f'posterior {d.get("league_proof", {}).get("posterior_wr", "â€”")}% Â· '
+                f'95% floor {d.get("league_proof", {}).get("wilson_lower", "â€”")}%'
+            ),
+        ),
         (
             "Career",
             f'{_record(d.get("esports_wins", 0), d.get("esports_losses", 0))} '
@@ -513,11 +639,33 @@ def _heroes_card(d):
 
 def _lanes_card(d):
     lanes = d["lane_pcts"] or {}
+    if d.get("lane_win_pct") is not None:
+        lane_summary = (
+            f'<div class="verdict {_wr_class(d["lane_win_pct"])}">'
+            f'Lane win: {d["lane_win_pct"]}% '
+            f'<span class="dim">({d.get("lane_wins", 0)}W / '
+            f'{d.get("lane_draws", 0)}D / {d.get("lane_losses", 0)}L; '
+            f'{d.get("lane_win_n", 0)} parsed matches)</span></div>'
+        )
+    elif d.get("lane_eff_median") is not None:
+        lane_summary = (
+            f'<div class="verdict warn">Exact lane result unavailable '
+            f'<span class="dim">Â· median EFF@10 {d["lane_eff_median"]}% '
+            f'over {d.get("lane_eff_n", 0)} parsed matches</span></div>'
+        )
+    else:
+        lane_summary = '<p class="dim">No parsed lane-result sample.</p>'
     rows = ""
     for lane in ("Safe", "Mid", "Off"):
         pct = lanes.get(lane, 0)
         gpm = d["lane_gpm"].get(lane)
         gtxt = f' <span class="dim">{gpm} gpm</span>' if gpm else ""
+        match_record = d.get("lane_wr", {}).get(lane)
+        if match_record:
+            gtxt += (
+                f' <span class="dim">Â· match WR {match_record["wr"]}%/'
+                f'{match_record["n"]}g</span>'
+            )
         rows += (f'<tr><td>{lane}{gtxt}</td><td class="num">{pct}%</td>'
                  f'<td class="barcell"><span class="bar"><i class="accent" '
                  f'style="width:{min(100, pct)}%"></i></span></td></tr>')
@@ -564,7 +712,12 @@ def _lanes_card(d):
                 f'<th>Basis</th><th>Why</th></tr>{body}</table>'
                 f'<p class="note">{E(pr["note"])}</p>')
     return (f'<div class="card span2"><h2>Lanes &amp; positions</h2>'
-            f'<table class="kv">{rows}</table>{ptbl}</div>')
+            f'{lane_summary}<table class="kv">{rows}</table>'
+            '<p class="note">Lane win compares both sidesâ€™ combined gold and '
+            'experience at 10:00 in the same physical lane; a lead under 5% '
+            'is a draw. “match WR” is the game result while assigned to that '
+            'lane, not the lane result.</p>'
+            f'{ptbl}</div>')
 
 
 def _tox_meter_cls(score):
@@ -738,7 +891,9 @@ def _player_page(pd, icons, season_label):
     chips = f'{cap}{priv}{tox_chip}'
 
     body = (
-        _winrate_card(d) + _east_card(d) + _esports_card(d) + _heroes_card(d)
+        _draft_recommendation_card(d)
+        + _winrate_card(d) + _east_card(d) + _esports_card(d)
+        + _vision_card(d) + _heroes_card(d) + _requested_heroes_card(d)
         + _lanes_card(d) + _toxicity_card(d)
     )
     gen = datetime.now().strftime("%Y-%m-%d %H:%M")

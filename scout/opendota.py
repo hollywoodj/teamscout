@@ -64,6 +64,9 @@ class OpenDota:
     def matches(self, sid, **params):
         return self.get(f"/players/{sid}/matches", params=params)
 
+    def match(self, match_id):
+        return self.get(f"/matches/{int(match_id)}")
+
     def wordcloud(self, sid):
         return self.get(f"/players/{sid}/wordcloud")
 

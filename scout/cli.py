@@ -13,6 +13,7 @@ from .analysis import build_metrics, pool_analysis, select_value_picks
 from .auction import annotate_players, load_history, measure_predictions
 from .cache import Cache
 from .captains import budget_map, load_official_teams
+from .deepstats import load_player_deep_stats
 from .esports import load_ticketed_histories
 from .fetch import (apply_mmr_baseline, fetch_player_sections,
                     players_from_snapshot, signup_delta)
@@ -78,10 +79,22 @@ def run_scout(args):
         sections, calls = fetch_player_sections(od, cache, player,
                                                 force=args.force_refresh,
                                                 offline=args.offline)
+        deep_before = od.calls
+        sections["deep"] = load_player_deep_stats(
+            od,
+            cache,
+            player,
+            sections.get("matches") or [],
+            offline=args.offline,
+        )
+        deep_calls = od.calls - deep_before
         sections["esports"] = ticketed[player["steam32"]]
         data = build_metrics(player, sections, hero_map)
         all_data.append({"player": player, "data": data})
-        cached_note = "cache" if calls == 0 else f"{calls} calls"
+        total_calls = calls + deep_calls
+        cached_note = "cache" if total_calls == 0 else f"{total_calls} calls"
+        if deep_calls:
+            cached_note += f", {deep_calls} deep"
         print(f"  [{i}/{len(players)}] {player['name']} ({player['mmr']} MMR) [{cached_note}]")
 
     if args.offline:

@@ -117,6 +117,11 @@ def _player_record(pd):
         "worth": d["worth_cost"],
         "worthBase": d["worth_base"],
         "edge": d["edge_cost"],
+        "draftValue": d.get("draft_value_score"),
+        "draftRank": d.get("draft_value_rank"),
+        "draftConfidence": d.get("draft_value_confidence"),
+        "draftVerdict": d.get("draft_value_verdict"),
+        "draftChannels": d.get("draft_value_channels") or {},
         "z30": d["z30"],
         "hot": d["hot"],
         "cold": d["cold"],
@@ -151,6 +156,24 @@ def _player_record(pd):
         "partyWr": d["party_wr"],
         "lanes": d["lane_pcts"],
         "laneN": d["lane_n"],
+        "laneWinPct": d.get("lane_win_pct"),
+        "laneWinN": d.get("lane_win_n", 0),
+        "laneDecidedN": d.get("lane_decided_n", 0),
+        "laneDrawPct": d.get("lane_draw_pct"),
+        "laneEff10": d.get("lane_eff_median"),
+        "laneEffN": d.get("lane_eff_n", 0),
+        "dewards30": d.get("dewards_per30"),
+        "dewardN": d.get("deward_n", 0),
+        "sentries30": d.get("sentry_per30"),
+        "visionN": d.get("vision_n", 0),
+        "bestRole": (d.get("role_fit") or {}).get("best"),
+        "secondaryRoles": (d.get("role_fit") or {}).get("secondary", []),
+        "roleFitLabel": (d.get("role_fit") or {}).get("label", "Unclear"),
+        "leagueProof": (d.get("league_proof") or {}).get("label"),
+        "requestedHeroFit": {
+            row["hero"]: row["label"]
+            for row in d.get("requested_heroes") or []
+        },
         "server": d["server_main"],
         "serverMix": d["server_mix"],
         "serverN": d["server_n"],
@@ -1162,6 +1185,7 @@ const COLS = [
   {k:"skill", t:"Plays like",num:true, sort:(a)=>a.skill==null?-1:a.skill, d:"Behavioural estimate of true current skill from medal + the ranked lobbies they actually play, adjusted for hot/cold form and inactivity. ± is the uncertainty. Does NOT use the listed MMR, so it can be compared against it"},
   {k:"gap",   t:"Gap",    num:true,  sort:(a)=>a.gap==null?-9999:a.gap, d:"Plays like − listed MMR. Big positive = likely underpriced; big negative = risk. ★unrated = placeholder listed MMR (expect a re-rate)"},
   {k:"tier",  t:"Value",  num:false, sort:(a)=>a.gap==null?-9999:a.gap, d:"Letter grade of the Gap: S ≥ +500 (steal), A ≥ +300, B ≥ +150, C fair, D/E/F listed above how they play. ? = gap smaller than the estimate's uncertainty"},
+  {k:"draftValue",t:"Draft Value",num:true,sort:(a)=>a.draftValue==null?-1:a.draftValue, d:"Confidence-weighted 0-100 pool rank: 55% auction edge, then verified league proof, exact recent lane results, role fit, vision/dewarding and requested-hero coverage. Missing evidence is neutral and lowers confidence."},
   {k:"edge",  t:"Edge$",  num:true,  sort:(a)=>a.edge==null?-9999:a.edge, d:"Auction edge: what a player of this TRUE skill usually costs, minus their expected price at the LISTED MMR. Positive = surplus if they go near their listing"},
   {k:"estCost",t:"Est$",num:true,sort:(a)=>a.estCost==null?-1:a.estCost, d:"Expected winning bid at the listed MMR — median price of the 7 nearest-MMR players across the last 4 auction seasons, plus a scarcity premium: top-of-pool names get bid up (~+80 for the #1 slot), the top 3 at each position carry a premium (+40/+25/+12, so set the Roles circles!), the tail goes for steals (~−15). Recomputes live as you edit captains, roles and current MMRs"},
   {k:"lastCost",t:"Last$",num:true,sort:(a)=>a.lastCost==null?-1:a.lastCost, d:"What this player actually cost at their most recent past auction (or captain / undrafted)"},
@@ -1311,6 +1335,15 @@ function tierCell(p){
   return `<span class="tierchip t-${letter}" title="${esc(p.tier)}${p.gap!=null?" · gap "+(p.gap>0?"+":"")+p.gap:""}">${short}</span>`;
 }
 
+function draftValueCell(p){
+  if (p.draftValue==null) return '<span class="dim">â€”</span>';
+  const cls = p.draftValue>=65 ? "good" : (p.draftValue<40 ? "bad" : "");
+  const rank = p.draftRank==null ? "" : `#${p.draftRank} `;
+  const lane = p.laneWinPct==null ? "lane n/a" : `lane ${p.laneWinPct}%/${p.laneWinN} parsed`;
+  const title = `${p.draftVerdict||""} Â· ${lane} Â· ${p.leagueProof||"league n/a"} Â· ${p.draftConfidence} confidence`;
+  return `<span class="${cls}" title="${esc(title)}"><b>${p.draftValue}</b> <span class="dim">${rank}${esc(p.draftConfidence)}</span></span>`;
+}
+
 function edgeCell(p){
   if (p.edge==null) return '<span class="dim">—</span>';
   const cls = p.edge>=20 ? "good" : (p.edge<=-20 ? "bad" : "dim");
@@ -1357,6 +1390,7 @@ function rowHtml(p){
     <td class="num">${skillCell(p)}</td>
     <td class="num">${gapCell(p)}</td>
     <td>${tierCell(p)}</td>
+    <td class="num">${draftValueCell(p)}</td>
     <td class="num">${edgeCell(p)}</td>
     <td class="num">${p.estCost==null?'<span class="dim">—</span>':"~"+p.estCost}</td>
     <td class="num">${lastCostCell(p)}</td>

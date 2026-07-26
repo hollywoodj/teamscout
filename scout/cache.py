@@ -10,6 +10,14 @@ from contextlib import contextmanager
 from . import config
 
 
+def _completed_match_payload(data):
+    return (
+        isinstance(data, dict)
+        and bool(data.get("version"))
+        and isinstance(data.get("players"), list)
+    )
+
+
 class Cache:
     _locks_guard = threading.Lock()
     _locks = {}
@@ -137,6 +145,36 @@ class Cache:
                 "data": data,
             }
             self._write_json_unlocked(path, doc)
+
+    # ---- immutable parsed match details ----
+    def _match_path(self, match_id):
+        return self._path("matches", f"{int(match_id)}.json")
+
+    def get_match(self, match_id):
+        """Return a cached normalized/raw match payload.
+
+        Completed Dota matches are immutable, so these entries intentionally
+        have no TTL. Missing or corrupt entries return None.
+        """
+        doc = self._read_json(self._match_path(match_id))
+        if not isinstance(doc, dict):
+            return None
+        return doc.get("data")
+
+    def set_match(self, match_id, data):
+        path = self._match_path(match_id)
+        with self._file_lock(path):
+            existing = self._read_json(path)
+            if (
+                isinstance(existing, dict)
+                and _completed_match_payload(existing.get("data"))
+            ):
+                return False
+            self._write_json_unlocked(
+                path,
+                {"fetched_at": time.time(), "data": data},
+            )
+        return True
 
     # ---- generic named blobs (hero constants, signup snapshots) ----
     def get_blob(self, name, max_age_hours=None):

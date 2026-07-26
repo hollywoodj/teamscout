@@ -9,12 +9,15 @@ signup list, enriches every player with OpenDota data, and produces:
   (sort/filter/search, draft board with best-available-by-position, compare tray;
   drafted marks persist in localStorage — works offline, safe to refresh mid-draft).
   The **Esports 6mo WR** column shows verified OpenDota ticketed-match win rate
-  and sample size, such as `56% (9g)`.
+  and sample size, such as `56% (9g)`. The **Draft Value** column ranks the
+  pool with a confidence-weighted combination of auction edge, verified league
+  proof, recent lane results, role fit, vision/dewarding, and targeted hero fit.
 - **`scout_reports/`** — one self-contained HTML **scout report per player**
   (+ an `index.html`): career narrative, winrate breakdowns, US-East
   vulnerability read, strongest/signature heroes, per-position ratings on the
-  Plays-Like scale, verified all-time ticketed league history, and a chat
-  toxicity report. Skip with `--no-reports`.
+  Plays-Like scale, verified all-time ticketed league history, exact recent
+  lane/deward evidence, requested-hero fit, and a chat toxicity report. Skip
+  with `--no-reports`.
 
 ## Usage
 
@@ -36,6 +39,9 @@ tool paces itself for the free tier and reuses cached data (`cache/`): volatile
 stats refresh every 2h, heavy history every 24h, and new signups fetch
 everything. Ticketed history uses one pool-wide OpenDota Explorer query and is
 cached for 24 hours; `--offline` reuses the last cached result.
+The ten newest full match parses per player are cached permanently by match ID
+because completed matches are immutable. The first deep run is heavier; later
+runs fetch only newly selected matches and offline runs reuse the cache.
 The separate Captains Mode/full-stack organized-play heuristic remains an
 internal scouting signal; it is not presented as proof that a match belonged
 to a ticketed league.
@@ -80,6 +86,25 @@ the overall and positional premiums, never both). In the dashboard the
 premium recomputes live from the hand-set roles, captains and corrected
 MMRs — set the support (4/5) role circles to price that market properly.
 *Last Cost* shows what a returning player actually went for.
+
+**Draft Value (0â€“100)** is pool-relative and deliberately price-led: 55% comes
+from auction value, followed by verified league proof (15%), exact recent lane
+results (12%), role fit (8%), vision/dewarding (5%), and requested-hero fit
+(5%). Every secondary channel shrinks toward neutral when its sample is small.
+Missing data lowers the confidence label instead of counting against a player.
+
+**Lane win %** comes only from each player's ten-match parsed sample. It
+compares both sides' combined minute-10 gold and XP in the same physical lane;
+a resource gap under 5% is a draw, and draws remain in the displayed sample
+denominator. The older per-lane number is explicitly called *match WR while
+assigned to that lane*. EFF@10 is shown only as a fallback when exact
+opposing-lane data is unavailable.
+
+**Vision/dewarding** separates effort from outcome. Observer and sentry
+purchases per 30 minutes come from the 200-match parsed projection. Observer
+and sentry wards actually destroyed per 30 come from the ten full match
+parses. Support comparisons are role-normalized; no ward purchases are
+invented for unparsed matches.
 
 **Server**: the region a player has played most over the last 3 months
 (USE / USW / SEA / EU…), derived from each match's cluster. Hover the cell for
@@ -303,6 +328,16 @@ Each page pulls together, for one player:
   record, league-by-league dates/results/top heroes, and match detail for the
   last six months. If there are no matches in that window, the report shows the
   three most recent leagues instead.
+- **Draft recommendation** — pool rank, 0–100 score, confidence, auction edge,
+  recommended role, strongest evidence, principal risks, and the six component
+  scores.
+- **Lanes and dewarding** — exact recent lane W/D/L, EFF@10 fallback, ward
+  purchases per 30, and successful observer/sentry dewards per 30, each with
+  its parsed-match sample.
+- **Requested hero fit** — lifetime, recent-six-month, and verified ticketed
+  records for Lone Druid, Meepo, Huskar, Phantom Lancer, Medusa, Sniper, Viper,
+  Witch Doctor, Zeus, and Necrophos. Labels distinguish proven/current evidence
+  from historical one-offs.
 - **US-East vulnerability** — win rate specifically on US East (the server LD2L
   plays on), with a verdict (`Vulnerable` / `Below even` / `Holds up`) and the
   gap vs their lifetime rate.
@@ -330,6 +365,7 @@ scout/
   ld2l.py          signup scraping (ld2l.org data-* attributes)
   opendota.py      rate-limited API client w/ retries + call counter
   cache.py         per-player JSON cache with per-section freshness
+  deepstats.py     immutable full-match cache + exact lane/deward extraction
   fetch.py         cache-aware fetching + signup delta + offline snapshot
   heroes.py        dynamic hero map (OpenDota constants, bundled fallback)
   stats.py         statistical primitives (binomial z, MAD z, IVW, Wilson)

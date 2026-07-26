@@ -114,6 +114,7 @@ def unavailable_history():
             "winrate": None,
         },
         "leagues": [],
+        "hero_stats": {},
         "recent_matches": [],
         "recent_mode": "none",
     }
@@ -216,6 +217,17 @@ def aggregate_histories(
                 }
             )
         leagues.sort(key=lambda league: league["latest"], reverse=True)
+        hero_rows = defaultdict(list)
+        for row in player_rows:
+            if row.get("hero_id"):
+                hero_rows[hero_map.name(row["hero_id"])].append(row)
+        hero_stats = {}
+        for name, entries in hero_rows.items():
+            summary = _summary(entries)
+            hero_stats[name] = {
+                "games": summary["games"],
+                "wins": summary["wins"],
+            }
 
         if recent_rows:
             selected, mode = recent_rows, "six_months"
@@ -243,6 +255,7 @@ def aggregate_histories(
             ),
             "six_month": six_month,
             "leagues": leagues,
+            "hero_stats": hero_stats,
             "recent_matches": [
                 _match_record(row, hero_map) for row in selected
             ],

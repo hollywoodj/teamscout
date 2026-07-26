@@ -24,6 +24,20 @@ MEDALS = {1: "Herald", 2: "Guardian", 3: "Crusader", 4: "Archon",
 
 LANE_NAMES = {1: "Safe", 2: "Mid", 3: "Off", 4: "Jungle"}
 
+REQUESTED_HEROES = (
+    (80, "Lone Druid"),
+    (82, "Meepo"),
+    (59, "Huskar"),
+    (12, "Phantom Lancer"),
+    (94, "Medusa"),
+    (35, "Sniper"),
+    (47, "Viper"),
+    (30, "Witch Doctor"),
+    (22, "Zeus"),
+    (36, "Necrophos"),
+)
+RECENT_SECONDS = 183 * 86400
+
 # server region a match was played on, from its cluster id (Dota clusters group
 # by hundreds → region). Short codes; unknown clusters fall through to None.
 REGION_RANGES = [
@@ -153,6 +167,153 @@ def _wl_rate(wl):
     return {"wins": w, "losses": l, "games": total, "winrate": round(w / total * 100, 1)}
 
 
+def beta_posterior_rate(wins, n, prior_games=10):
+    """Posterior mean WR with a neutral 50% beta prior."""
+    if n is None or n < 0:
+        return None
+    return round((wins + prior_games / 2) / (n + prior_games) * 100, 1)
+
+
+def league_proof(d):
+    status = d.get("esports_status", "unavailable")
+    if status == "unavailable":
+        return {
+            "label": "Unavailable",
+            "posterior_wr": None,
+            "wilson_lower": None,
+        }
+    n = int(d.get("esports_games") or 0)
+    wins = int(d.get("esports_wins") or 0)
+    leagues = int(d.get("esports_league_count") or 0)
+    posterior = beta_posterior_rate(wins, n)
+    lower = wilson_lower(wins, n, z=1.96) if n else None
+    if not n:
+        label = "No verified history"
+    elif n >= 20 and leagues >= 2 and lower is not None and lower >= 0.5:
+        label = "Proven winner"
+    elif n >= 10 and posterior > 52:
+        label = "Winning record"
+    elif n >= 20:
+        label = "Experienced"
+    else:
+        label = "Limited sample"
+    return {
+        "label": label,
+        "posterior_wr": posterior,
+        "wilson_lower": round(lower * 100, 1) if lower is not None else None,
+    }
+
+
+def exact_lane_result(sample, xp_weight):
+    """Win/draw/loss from both sides' minute-ten lane resources."""
+    needed = (
+        "ally_lane_gold10",
+        "enemy_lane_gold10",
+        "ally_lane_xp10",
+        "enemy_lane_xp10",
+    )
+    if not isinstance(sample, dict) or any(sample.get(key) is None for key in needed):
+        return None
+    ally = sample["ally_lane_gold10"] + xp_weight * sample["ally_lane_xp10"]
+    enemy = sample["enemy_lane_gold10"] + xp_weight * sample["enemy_lane_xp10"]
+    if max(ally, enemy) <= 0:
+        return None
+    edge = (ally - enemy) / max(ally, enemy)
+    if edge >= 0.05:
+        return "win"
+    if edge <= -0.05:
+        return "loss"
+    return "draw"
+
+
+def role_fit(d, ratings=None):
+    ratings = ratings if ratings is not None else position_ratings(d)
+    if not ratings or not ratings.get("ratings"):
+        return {
+            "best": None,
+            "secondary": [],
+            "credible": [],
+            "label": "Unclear",
+        }
+    rows = ratings["ratings"]
+    best = ratings.get("primary")
+    if best is None:
+        return {
+            "best": None,
+            "secondary": [],
+            "credible": [],
+            "label": "Unclear",
+        }
+    best_mmr = rows[best]["mmr"]
+    secondary = sorted(
+        (
+            pos for pos, row in rows.items()
+            if pos != best and (
+                (
+                    row.get("conf") == "measured"
+                    and best_mmr - row["mmr"] <= 175
+                ) or (
+                    row.get("conf") == "part-time"
+                    and best_mmr - row["mmr"] <= 100
+                )
+            )
+        ),
+        key=lambda pos: rows[pos]["mmr"],
+        reverse=True,
+    )[:2]
+    credible = [best, *secondary]
+    return {
+        "best": best,
+        "secondary": secondary,
+        "credible": credible,
+        "label": "Versatile" if secondary else "Specialist",
+    }
+
+
+def _requested_hero_label(lifetime_games, lifetime_wins, recent_games,
+                          ticketed_games, ticketed_wins):
+    posterior = beta_posterior_rate(lifetime_wins, lifetime_games)
+    if (
+        lifetime_games >= 20 and posterior is not None and posterior >= 52
+    ) or (
+        ticketed_games >= 5 and ticketed_wins * 2 > ticketed_games
+    ):
+        return "Proven"
+    if recent_games >= 3:
+        return "Current"
+    if lifetime_games >= 5:
+        return "Historical"
+    if lifetime_games:
+        return "Tried"
+    return "No evidence"
+
+
+def _requested_hero_matrix(lifetime, recent, ticketed):
+    rows = []
+    for hero_id, name in REQUESTED_HEROES:
+        life = lifetime.get(hero_id, {})
+        rec = recent.get(hero_id, {})
+        tic = ticketed.get(name, {})
+        lg, lw = int(life.get("games", 0)), int(life.get("wins", 0))
+        rg, rw = int(rec.get("games", 0)), int(rec.get("wins", 0))
+        tg, tw = int(tic.get("games", 0)), int(tic.get("wins", 0))
+        rows.append({
+            "hero_id": hero_id,
+            "hero": name,
+            "lifetime_games": lg,
+            "lifetime_wins": lw,
+            "lifetime_wr": round(lw / lg * 100, 1) if lg else None,
+            "recent_games": rg,
+            "recent_wins": rw,
+            "recent_wr": round(rw / rg * 100, 1) if rg else None,
+            "ticketed_games": tg,
+            "ticketed_wins": tw,
+            "ticketed_wr": round(tw / tg * 100, 1) if tg else None,
+            "label": _requested_hero_label(lg, lw, rg, tg, tw),
+        })
+    return rows
+
+
 def _skill_estimate(d, matches):
     """Combine medal-implied MMR and ranked-lobby median into one estimate.
 
@@ -235,6 +396,7 @@ def build_metrics(player, sections, hero_map):
         "signature_heroes": [],
         # hero_id -> lifetime games, for hero->position priors (hero_positions)
         "hero_games": {},
+        "hero_stats": {}, "recent_hero_stats": {}, "requested_heroes": [],
         # pool-median affinity per position, filled by pool_analysis
         "hero_pos_baseline": None,
         # skill estimate (behavioral, independent of listed MMR)
@@ -261,6 +423,16 @@ def build_metrics(player, sections, hero_map):
         # per-lane record: {lane: {"n","w","wr"}} — lets a lane the player
         # actually wins in rate above one they merely show up in
         "lane_wr": {},
+        "lane_eff_n": 0, "lane_eff_median": None, "lane_eff_by_lane": {},
+        "vision_n": 0, "observer_per30": None, "sentry_per30": None,
+        "deep_samples": [], "deep_parsed_n": 0,
+        "lane_win_n": 0, "lane_decided_n": 0, "lane_wins": 0,
+        "lane_draws": 0, "lane_losses": 0, "lane_win_pct": None,
+        "lane_draw_pct": None, "lane_score_pct": None,
+        "lane_results_by_lane": {},
+        "deward_n": 0, "observer_kills_per30": None,
+        "sentry_kills_per30": None, "dewards_per30": None,
+        "vision_score": None, "vision_reliability": 0.0,
         # server region played most over the last 3 months
         "server_main": None, "server_mix": "", "server_n": 0,
         # record on US East servers over the full sample (LD2L plays on USE)
@@ -276,7 +448,11 @@ def build_metrics(player, sections, hero_map):
         "esports_6mo_games": 0, "esports_6mo_wins": 0,
         "esports_6mo_losses": 0, "esports_6mo_winrate": None,
         "esports_leagues": [], "esports_recent_matches": [],
-        "esports_recent_mode": "none",
+        "esports_recent_mode": "none", "esports_hero_stats": {},
+        "league_proof": {},
+        "role_fit": {}, "draft_value_score": None, "draft_value_rank": None,
+        "draft_value_confidence": "low", "draft_value_channels": {},
+        "draft_value_verdict": "",
         # auction history (filled in by auction.annotate_players)
         "est_cost": None, "est_base": None, "last_cost": None,
         "last_cost_season": None, "last_draft_mmr": None,
@@ -307,6 +483,7 @@ def build_metrics(player, sections, hero_map):
             "esports_leagues": esports.get("leagues") or [],
             "esports_recent_matches": esports.get("recent_matches") or [],
             "esports_recent_mode": esports.get("recent_mode", "none"),
+            "esports_hero_stats": esports.get("hero_stats") or {},
         })
 
     # ---- profile / rank ----
@@ -359,7 +536,13 @@ def build_metrics(player, sections, hero_map):
             games = int(h.get("games", 0))
             if games > 0:
                 try:
-                    d["hero_games"][int(h["hero_id"])] = games
+                    hero_id = int(h["hero_id"])
+                    wins = int(h.get("win", 0))
+                    d["hero_games"][hero_id] = games
+                    d["hero_stats"][hero_id] = {
+                        "games": games,
+                        "wins": wins,
+                    }
                 except (KeyError, ValueError, TypeError):
                     pass
         for h in heroes:
@@ -421,6 +604,66 @@ def build_metrics(player, sections, hero_map):
                     "n": len(in_lane), "w": w,
                     "wr": round(w / len(in_lane) * 100, 1),
                 }
+
+        lane_eff = [
+            m for m in matches
+            if m.get("version")
+            and not m.get("is_roaming")
+            and m.get("lane_role") in LANE_NAMES
+            and m.get("lane_efficiency_pct") is not None
+        ]
+        d["lane_eff_n"] = len(lane_eff)
+        if lane_eff:
+            d["lane_eff_median"] = round(statistics.median(
+                float(m["lane_efficiency_pct"]) for m in lane_eff
+            ), 1)
+            for lane_id, lane_name in LANE_NAMES.items():
+                values = [
+                    float(m["lane_efficiency_pct"]) for m in lane_eff
+                    if m.get("lane_role") == lane_id
+                ]
+                if values:
+                    d["lane_eff_by_lane"][lane_name] = {
+                        "n": len(values),
+                        "median": round(statistics.median(values), 1),
+                    }
+
+        vision_rows = [
+            m for m in matches
+            if m.get("version") and (m.get("duration") or 0) > 0
+            and (
+                m.get("purchase_ward_observer") is not None
+                or m.get("purchase_ward_sentry") is not None
+            )
+        ]
+        d["vision_n"] = len(vision_rows)
+        if vision_rows:
+            duration30 = sum(m["duration"] for m in vision_rows) / 1800
+            if duration30:
+                d["observer_per30"] = round(sum(
+                    int(m.get("purchase_ward_observer") or 0)
+                    for m in vision_rows
+                ) / duration30, 2)
+                d["sentry_per30"] = round(sum(
+                    int(m.get("purchase_ward_sentry") or 0)
+                    for m in vision_rows
+                ) / duration30, 2)
+
+        cutoff = int(datetime.now(tz=timezone.utc).timestamp()) - RECENT_SECONDS
+        for m in matches:
+            hero_id = m.get("hero_id")
+            if not hero_id or (m.get("start_time") or 0) < cutoff:
+                continue
+            try:
+                hero_id = int(hero_id)
+            except (TypeError, ValueError):
+                continue
+            entry = d["recent_hero_stats"].setdefault(
+                hero_id, {"games": 0, "wins": 0}
+            )
+            entry["games"] += 1
+            if _won(m):
+                entry["wins"] += 1
 
         # record when queuing >= UP_LOBBY_STARS above own medal
         own = tier_to_stars(d["rank_tier"])
@@ -553,6 +796,19 @@ def build_metrics(player, sections, hero_map):
 
     # ---- chat toxicity (wordcloud my_word_counts) — see scout/toxicity.py ----
     d.update(toxicity.score(sections.get("wordcloud")))
+    d["deep_samples"] = [
+        sample for sample in (sections.get("deep") or [])
+        if isinstance(sample, dict)
+    ]
+    d["deep_parsed_n"] = sum(
+        1 for sample in d["deep_samples"] if sample.get("parsed")
+    )
+    d["league_proof"] = league_proof(d)
+    d["requested_heroes"] = _requested_hero_matrix(
+        d["hero_stats"],
+        d["recent_hero_stats"],
+        d["esports_hero_stats"],
+    )
 
     return d
 
@@ -672,6 +928,9 @@ def pool_analysis(all_data, price_estimator=None):
             d["worth_cost"] = price_estimator(d["adj_skill"], measured_roles(d))
             if d["worth_cost"] is not None and d["est_cost"] is not None:
                 d["edge_cost"] = d["worth_cost"] - d["est_cost"]
+
+    _finalize_deep_and_role_metrics(all_data)
+    score_draft_values(all_data)
 
 
 def value_tier(d):
@@ -977,6 +1236,327 @@ def position_ratings(d, hero_map=None):
     return {"primary": primary, "ratings": ratings,
             "note": "Pos 4/5 are separated by hero pool and farm profile — "
                     "OpenDota's lane data alone cannot tell them apart."}
+
+
+def _percentile_scores(values):
+    """Return average-rank 0..100 percentiles for non-None values."""
+    known = sorted((value, index) for index, value in enumerate(values)
+                   if value is not None)
+    if not known:
+        return {}
+    if len(known) == 1:
+        return {known[0][1]: 50.0}
+    result = {}
+    start = 0
+    while start < len(known):
+        end = start
+        while end + 1 < len(known) and known[end + 1][0] == known[start][0]:
+            end += 1
+        percentile = ((start + end) / 2) / (len(known) - 1) * 100
+        for _, index in known[start:end + 1]:
+            result[index] = percentile
+        start = end + 1
+    return result
+
+
+def _finalize_deep_and_role_metrics(all_data):
+    samples = [
+        sample
+        for pd in all_data
+        for sample in (pd["data"].get("deep_samples") or [])
+        if sample.get("parsed")
+    ]
+    gold = sum(
+        (sample.get("ally_lane_gold10") or 0)
+        + (sample.get("enemy_lane_gold10") or 0)
+        for sample in samples
+    )
+    xp = sum(
+        (sample.get("ally_lane_xp10") or 0)
+        + (sample.get("enemy_lane_xp10") or 0)
+        for sample in samples
+    )
+    xp_weight = gold / xp if xp else 0.6
+
+    for pd in all_data:
+        d = pd["data"]
+        results = []
+        by_lane = {}
+        for sample in d.get("deep_samples") or []:
+            result = exact_lane_result(sample, xp_weight)
+            if result is None:
+                continue
+            results.append(result)
+            lane = LANE_NAMES.get(sample.get("lane_role"), "Unknown")
+            lane_rows = by_lane.setdefault(
+                lane, {"n": 0, "wins": 0, "draws": 0, "losses": 0}
+            )
+            lane_rows["n"] += 1
+            result_key = {
+                "win": "wins",
+                "draw": "draws",
+                "loss": "losses",
+            }[result]
+            lane_rows[result_key] += 1
+        d["lane_win_n"] = len(results)
+        d["lane_wins"] = results.count("win")
+        d["lane_draws"] = results.count("draw")
+        d["lane_losses"] = results.count("loss")
+        d["lane_decided_n"] = d["lane_wins"] + d["lane_losses"]
+        if d["lane_win_n"]:
+            d["lane_win_pct"] = round(
+                d["lane_wins"] / d["lane_win_n"] * 100, 1
+            )
+            d["lane_draw_pct"] = round(
+                d["lane_draws"] / d["lane_win_n"] * 100, 1
+            )
+            d["lane_score_pct"] = round(
+                (
+                    d["lane_wins"] + 0.5 * d["lane_draws"]
+                ) / d["lane_win_n"] * 100,
+                1,
+            )
+        for lane, row in by_lane.items():
+            row["win_pct"] = (
+                round(row["wins"] / row["n"] * 100, 1) if row["n"] else None
+            )
+            row["draw_pct"] = (
+                round(row["draws"] / row["n"] * 100, 1) if row["n"] else None
+            )
+        d["lane_results_by_lane"] = by_lane
+
+        deward_rows = [
+            sample for sample in (d.get("deep_samples") or [])
+            if sample.get("parsed")
+            and (sample.get("duration") or 0) > 0
+            and sample.get("observer_kills") is not None
+            and sample.get("sentry_kills") is not None
+        ]
+        d["deward_n"] = len(deward_rows)
+        if deward_rows:
+            duration30 = sum(row["duration"] for row in deward_rows) / 1800
+            obs = sum(row["observer_kills"] for row in deward_rows)
+            sentry = sum(row["sentry_kills"] for row in deward_rows)
+            d["observer_kills_per30"] = round(obs / duration30, 2)
+            d["sentry_kills_per30"] = round(sentry / duration30, 2)
+            d["dewards_per30"] = round((obs + sentry) / duration30, 2)
+
+        d["role_fit"] = role_fit(d)
+        d["league_proof"] = league_proof(d)
+
+    support_indexes = [
+        index for index, pd in enumerate(all_data)
+        if (
+            pd["data"].get("role_fit", {}).get("best") in (4, 5)
+            or any(pos in (4, 5)
+                   for pos in pd["data"].get("role_fit", {}).get("secondary", []))
+        )
+    ]
+    sentry_values = [
+        pd["data"].get("sentry_per30") if index in support_indexes else None
+        for index, pd in enumerate(all_data)
+    ]
+    deward_values = [
+        pd["data"].get("dewards_per30") if index in support_indexes else None
+        for index, pd in enumerate(all_data)
+    ]
+    sentry_pct = _percentile_scores(sentry_values)
+    deward_pct = _percentile_scores(deward_values)
+    for index in support_indexes:
+        effort = sentry_pct.get(index)
+        success = deward_pct.get(index)
+        d = all_data[index]["data"]
+        effort_rel = _shrink(d.get("vision_n") or 0, 20)
+        success_rel = _shrink(d.get("deward_n") or 0, 5)
+        if effort is not None:
+            effort = 50 + (effort - 50) * effort_rel
+        if success is not None:
+            success = 50 + (success - 50) * success_rel
+        if effort is not None and success is not None:
+            d["vision_score"] = round(
+                0.7 * effort + 0.3 * success, 1
+            )
+            d["vision_reliability"] = round(
+                0.7 * effort_rel + 0.3 * success_rel, 3
+            )
+        elif effort is not None:
+            d["vision_score"] = round(effort, 1)
+            d["vision_reliability"] = round(effort_rel, 3)
+        elif success is not None:
+            d["vision_score"] = round(success, 1)
+            d["vision_reliability"] = round(success_rel, 3)
+
+
+def score_draft_values(all_data):
+    """Assign a transparent pool-relative 0..100 draft-value score."""
+    if not all_data:
+        return
+    value_inputs = []
+    for pd in all_data:
+        d = pd["data"]
+        value_inputs.append(d.get("edge_cost"))
+    value_pct = _percentile_scores(value_inputs)
+    weights = {
+        "auction": 0.55,
+        "league": 0.15,
+        "lane": 0.12,
+        "role": 0.08,
+        "vision": 0.05,
+        "heroes": 0.05,
+    }
+
+    for index, pd in enumerate(all_data):
+        d = pd["data"]
+        proof = d.get("league_proof") or league_proof(d)
+        league_n = int(d.get("esports_games") or 0)
+        posterior = proof.get("posterior_wr")
+        league_score = 50
+        if posterior is not None and league_n:
+            league_score = clamp(
+                50 + (posterior - 50) * 2 * _shrink(league_n, 10),
+                0, 100,
+            )
+
+        lane_n = int(d.get("lane_win_n") or 0)
+        lane_wr = d.get("lane_score_pct")
+        lane_score = 50
+        if lane_wr is not None and lane_n:
+            lane_score = clamp(
+                50 + (lane_wr - 50) * 2 * _shrink(lane_n, 10),
+                0, 100,
+            )
+
+        fit = d.get("role_fit") or {}
+        role_score = (
+            62 if fit.get("label") == "Versatile"
+            else 55 if fit.get("label") == "Specialist"
+            else 50
+        )
+        vision_score = d.get("vision_score")
+        if vision_score is None:
+            vision_score = 50
+        labels = [row.get("label") for row in d.get("requested_heroes") or []]
+        hero_score = clamp(
+            50 + labels.count("Proven") * 6 + labels.count("Current") * 3
+            + labels.count("Historical"),
+            0, 100,
+        )
+        channels = {
+            "auction": round(value_pct.get(index, 50), 1),
+            "league": round(league_score, 1),
+            "lane": round(lane_score, 1),
+            "role": round(role_score, 1),
+            "vision": round(vision_score, 1),
+            "heroes": round(hero_score, 1),
+        }
+        d["draft_value_channels"] = channels
+        d["draft_value_score"] = round(sum(
+            channels[name] * weight for name, weight in weights.items()
+        ))
+
+        coverage = 0.0
+        if value_inputs[index] is not None:
+            coverage += weights["auction"]
+        coverage += weights["league"] * _shrink(league_n, 20)
+        coverage += weights["lane"] * _shrink(lane_n, 10)
+        if fit.get("label") and fit.get("label") != "Unclear":
+            coverage += weights["role"]
+        if d.get("vision_score") is not None:
+            coverage += (
+                weights["vision"] * (d.get("vision_reliability") or 0)
+            )
+        if any(label != "No evidence" for label in labels):
+            coverage += weights["heroes"]
+        d["draft_value_confidence"] = (
+            "high" if coverage >= 0.75
+            else "medium" if coverage >= 0.5
+            else "low"
+        )
+        evidence = []
+        edge = d.get("edge_cost")
+        if edge is not None and edge > 0:
+            evidence.append(f"Estimated auction surplus: +${edge}")
+        if proof.get("label") == "Proven winner":
+            evidence.append(
+                f"Verified league winner over {league_n} ticketed games"
+            )
+        if d.get("lane_win_pct") is not None and lane_n >= 2:
+            evidence.append(
+                f"Wins {d['lane_win_pct']}% of {lane_n} exact recent lanes"
+            )
+        if d.get("dewards_per30") is not None and d.get("deward_n"):
+            evidence.append(
+                f"{d['dewards_per30']} successful dewards/30 "
+                f"over {d['deward_n']} matches"
+            )
+        if fit.get("label") == "Versatile":
+            evidence.append(
+                f"Credible fit at {len(fit.get('credible') or [])} positions"
+            )
+        hero_hits = sum(
+            label in ("Proven", "Current") for label in labels
+        )
+        if hero_hits:
+            evidence.append(
+                f"{hero_hits} requested heroes have current/proven evidence"
+            )
+
+        risks = []
+        if edge is None:
+            risks.append("No reliable auction-edge estimate")
+        if proof.get("label") in (
+            "No verified history", "Limited sample", "Unavailable"
+        ):
+            risks.append(f"League proof: {proof.get('label', 'Unavailable')}")
+        if lane_n < 3:
+            risks.append(
+                "Exact lane sample is "
+                + ("unavailable" if not lane_n else f"only {lane_n}")
+            )
+        if fit.get("label") == "Unclear":
+            risks.append("No position has credible role evidence")
+        if (
+            fit.get("best") in (4, 5)
+            and (d.get("deward_n") or 0) < 3
+        ):
+            risks.append("Successful-deward sample is thin")
+        d["draft_value_evidence"] = evidence[:3] or [
+            "No channel is materially above neutral"
+        ]
+        d["draft_value_risks"] = risks[:3] or [
+            "No major evidence-based risk identified"
+        ]
+
+    ranked = sorted(
+        (
+            (index, pd) for index, pd in enumerate(all_data)
+            if pd["player"].get("draftable") == "Y"
+            and pd["player"].get("captain") != "Y"
+        ),
+        key=lambda pair: (
+            -(pair[1]["data"].get("draft_value_score") or 0),
+            -(
+                pair[1]["data"]["edge_cost"]
+                if pair[1]["data"].get("edge_cost") is not None
+                else -9999
+            ),
+            str(pair[1]["player"].get("name") or "").lower(),
+        ),
+    )
+    for pd in all_data:
+        pd["data"]["draft_value_rank"] = None
+    for rank, (_, pd) in enumerate(ranked, 1):
+        d = pd["data"]
+        d["draft_value_rank"] = rank
+        edge = d.get("edge_cost")
+        fit = d.get("role_fit") or {}
+        role = fit.get("best")
+        role_text = f"Pos {role}" if role else "role unclear"
+        edge_text = (
+            f"{edge:+d} auction edge" if edge is not None
+            else "price evidence limited"
+        )
+        d["draft_value_verdict"] = f"{edge_text}; best fit {role_text}"
 
 
 def _exp_phrase(total):
