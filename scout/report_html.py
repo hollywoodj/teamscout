@@ -879,7 +879,8 @@ const LSKEY = "ld2l-draft2-s" + SEASON;
 // engine is then the single source of truth: budgets and drafted state mirror
 // it exactly, and NOTHING is persisted — practice runs must not pollute the
 // hand-curated draft-day state in localStorage.
-let MOCKMODE = false, MOCKBUDGETS = {}, mockDraftSig = null;
+let MOCKMODE = false, MOCKBUDGETS = {}, MOCKCAPTAINS = new Set(),
+    mockDraftSig = null;
 
 // draft state: {playerId: {p: pricePaid|null, t: winningCaptain|""}}
 let draftInfo = JSON.parse(localStorage.getItem(LSKEY) || "{}");
@@ -983,7 +984,7 @@ let manualCaptains;
     manualCaptains = new Set(JSON.parse(saved));
   }
 }
-const isCaptain = id => manualCaptains.has(id);
+const isCaptain = id => (MOCKMODE ? MOCKCAPTAINS : manualCaptains).has(id);
 const saveCaptains = () => localStorage.setItem(CAPKEY, JSON.stringify([...manualCaptains]));
 function toggleCaptain(id){
   isCaptain(id) ? manualCaptains.delete(id) : manualCaptains.add(id);
@@ -2306,6 +2307,11 @@ function liveApply(st){
     // overspending), and nothing is written to localStorage.
     MOCKMODE = true;
     MOCKBUDGETS = st.budgets || {};
+    MOCKCAPTAINS = new Set(
+      (st.mock.teams || [])
+        .filter(t => t.steam32 != null)
+        .map(t => Number(t.steam32))
+    );
     const fresh = {};
     for (const pk of st.picks || []){
       if (pk.is_captain) continue;

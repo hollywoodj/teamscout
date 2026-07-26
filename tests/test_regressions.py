@@ -309,6 +309,27 @@ class MockRosterSourceTests(unittest.TestCase):
             "official",
         )
 
+    def test_mock_snapshot_exposes_captain_steam_id_to_dashboard(self):
+        state = MockState(
+            53,
+            "S22",
+            [MockAuctionTests.player()],
+            [{
+                "captain": "champ0044",
+                "steam64": config.STEAM64_OFFSET + 154288911,
+                "budget": 265,
+                "team_id": "435",
+                "pos": [3],
+            }],
+            {},
+            "champ0044",
+            roster_source="official",
+        )
+
+        team = state.live_snapshot()["mock"]["teams"][0]
+
+        self.assertEqual(team["steam32"], 154288911)
+
 
 class StatsTests(unittest.TestCase):
     """scout.stats primitives — the untested foundation the skill ensemble and

@@ -406,8 +406,10 @@ def _pref_order(slots):
 
 
 class Team:
-    def __init__(self, captain, budget, team_id, captain_pos, is_me, aggr):
+    def __init__(self, captain, budget, team_id, captain_pos, is_me, aggr,
+                 steam32=None):
         self.captain = captain
+        self.steam32 = steam32
         self.team_id = team_id
         self.start_budget = budget
         self.budget = budget
@@ -588,8 +590,10 @@ class MockState:
             cpos = t.get("pos")  # dashboard-curated role set wins; else measured
             if not cpos:
                 cpos = _captain_positions(by_steam, t.get("steam64"))
+            steam32 = (int(t["steam64"]) - config.STEAM64_OFFSET
+                       if t.get("steam64") else None)
             team = Team(cap, int(t.get("budget") or 0), t.get("team_id"),
-                        cpos, is_me=False, aggr=aggr)
+                        cpos, is_me=False, aggr=aggr, steam32=steam32)
             team.targets = saved.get(cap, set()) & set(self.pool)
             self.teams[cap] = team
             self.order.append(cap)
@@ -689,7 +693,8 @@ class MockState:
                       "positions": sorted(pl["slots"]), "worth": pl["worth"]}
                      for s, pl in self.pool.items() if s not in self.drafted]
             avail.sort(key=lambda p: (p["worth"] is None, -(p["worth"] or 0)))
-            teams = [{"captain": t.captain, "budget": t.budget,
+            teams = [{"captain": t.captain, "steam32": t.steam32,
+                      "budget": t.budget,
                       "start_budget": t.start_budget, "slots_left": t.slots_left,
                       "is_me": t.is_me, "full": t.full,
                       "cap_pos": sorted(t.cap_pos),
