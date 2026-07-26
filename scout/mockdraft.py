@@ -1026,19 +1026,22 @@ def _ai_nominate(state, cap):
     return True
 
 
-def _ai_bid_round(state):
+def _ai_bid_round(state, force=False):
     """Maybe place ONE AI raise this tick.
 
     The pacing gate is rolled once per tick (not per team): with many eager
     captains, a per-team roll would fire almost every tick and the tempo knob
     would do nothing. So the cadence is exactly MOCK_AI_TICK / MOCK_AI_RAISE_PROB
     seconds between bids, and a single random eager captain makes the raise.
+
+    `force` skips only the pacing gate for the final deadline check. Returns
+    True when a legal raise was placed.
     """
     with state._lock:
         if state.phase != "bidding" or not state.nominee:
-            return
-        if random.random() >= config.MOCK_AI_RAISE_PROB:
-            return  # this tick nobody moves — spaces the bids out
+            return False
+        if not force and random.random() >= config.MOCK_AI_RAISE_PROB:
+            return False  # this tick nobody moves — spaces the bids out
         pl = state.nominee
         avail = [p for s, p in state.pool.items() if s not in state.drafted]
         eager = [state.teams[c] for c in state.order
@@ -1046,7 +1049,7 @@ def _ai_bid_round(state):
                  and not state.teams[c].full
                  and state.teams[c].max_bid(pl, avail) > state.high_bid]
         if not eager:
-            return
+            return False
         team = random.choice(eager)
         mb = team.max_bid(pl, avail)
         gap = mb - state.high_bid
@@ -1059,6 +1062,8 @@ def _ai_bid_round(state):
         if amount > state.high_bid:
             state._place_bid(team.captain, amount)
             print(f"  💰 {team.captain} bids ${amount} on {pl['name']}")
+            return True
+        return False
 
 
 def _resolve_sale(state):
@@ -1123,6 +1128,8 @@ def _run_open_auction(state, stop):
             stop.wait(0.1)
             continue
         if time.time() >= deadline:
+            if _ai_bid_round(state, force=True):
+                continue
             return
         _ai_bid_round(state)
         # scaled in lockstep with the bid window, so the expected number of

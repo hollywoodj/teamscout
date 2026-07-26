@@ -31,6 +31,7 @@ from scout.herodraft_html import render_page
 from scout.live import LiveState
 from scout.mockdraft import (
     MockState,
+    _ai_bid_round,
     _next_nominator,
     _resolve_sale,
     _run_open_auction,
@@ -179,6 +180,16 @@ class MockAuctionTests(unittest.TestCase):
         ]
         return MockState(53, "S22", [self.player()], captains, {}, "Me")
 
+    def competitive_state(self):
+        captains = [
+            {"captain": "A", "budget": 500, "team_id": "1", "pos": [2]},
+            {"captain": "B", "budget": 500, "team_id": "2", "pos": [3]},
+            {"captain": "Me", "budget": 500, "team_id": "3", "pos": [4]},
+        ]
+        return MockState(
+            53, "S22", [self.player(worth=100)], captains, {}, "Me"
+        )
+
     def test_full_human_roster_cannot_bid(self):
         state = self.state()
         me = state.teams["Me"]
@@ -298,6 +309,13 @@ class MockAuctionTests(unittest.TestCase):
             state._timing_changed = FakeTimingEvent(state, switch)
             stop = FakeStop(state, switch)
             rounds = []
+
+            def record_round(current, force=False):
+                if force:
+                    return False
+                rounds.append(Clock.now)
+                return False
+
             with mock.patch.object(
                 mockdraft.time, "time", side_effect=lambda: Clock.now
             ), mock.patch.object(
@@ -305,7 +323,7 @@ class MockAuctionTests(unittest.TestCase):
             ), mock.patch.object(
                 mockdraft,
                 "_ai_bid_round",
-                side_effect=lambda current: rounds.append(Clock.now),
+                side_effect=record_round,
             ):
                 if not switch:
                     state.set_speed(8)
@@ -315,6 +333,62 @@ class MockAuctionTests(unittest.TestCase):
 
         self.assertEqual(opportunities(switch=False), 6)
         self.assertEqual(opportunities(switch=True), 6)
+
+    def test_forced_ai_round_bypasses_silence_only_for_eligible_competitor(self):
+        state = self.competitive_state()
+        player = state.pool[10]
+        state._open_auction(player, 1, "A")
+
+        with mock.patch("scout.mockdraft.random.random", return_value=1.0):
+            self.assertFalse(_ai_bid_round(state))
+            self.assertTrue(_ai_bid_round(state, force=True))
+
+        self.assertEqual(state.high_bidder, "B")
+        self.assertGreater(state.high_bid, 1)
+
+        state.teams["A"].budget = 1
+        state.high_bidder = "B"
+        state.high_bid = state.teams["B"].max_bid(
+            player, list(state.pool.values())
+        )
+        self.assertFalse(_ai_bid_round(state, force=True))
+
+    def test_expired_auction_runs_to_competitive_ceiling(self):
+        from scout import mockdraft
+
+        state = self.competitive_state()
+        player = state.pool[10]
+        clock = {"now": 100.0}
+        stop = threading.Event()
+        competitors = ("A", "B")
+
+        with mock.patch.object(
+            mockdraft.time, "time", side_effect=lambda: clock["now"]
+        ):
+            state._open_auction(player, 1, "A")
+            ceilings = [
+                state.teams[name].max_bid(player, list(state.pool.values()))
+                for name in competitors
+            ]
+            state.deadline = clock["now"]
+
+            def expire(current, _stop, _seconds):
+                clock["now"] = current.deadline
+                return True
+
+            with mock.patch.object(
+                mockdraft.random, "random", return_value=1.0
+            ), mock.patch.object(
+                mockdraft.random, "choice", side_effect=lambda eager: eager[0]
+            ), mock.patch.object(
+                mockdraft.random, "choices", return_value=[25]
+            ), mock.patch.object(
+                mockdraft, "_wait_scaled_interval", side_effect=expire
+            ):
+                _run_open_auction(state, stop)
+
+        self.assertGreaterEqual(state.high_bid, min(ceilings))
+        self.assertFalse(_ai_bid_round(state, force=True))
 
 
 class MockRosterSourceTests(unittest.TestCase):

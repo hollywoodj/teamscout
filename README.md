@@ -256,7 +256,9 @@ Legend core outbids a Crusader support filler but loses to an Ancient one, and
 top talent never slips through for $1. Bids are hard-capped at 1.25× a
 player's Worth$ no matter how target premiums and aggression stack, so there
 are no runaway overbids. The Mock bar shows which positions your own team
-still needs (`need P4/P5`).
+still needs (`need P4/P5`). The clock can pause naturally, but a player cannot
+hammer while a non-leading AI captain remains willing and able to raise;
+expired auctions perform one last legal AI bid check before closing.
 
 You draft from the board (default seat **Hollywood**, changeable in the header)
 against rational AI captains: each values players by role need (fill positions
