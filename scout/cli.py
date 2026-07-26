@@ -12,12 +12,12 @@ from . import config
 from .analysis import build_metrics, pool_analysis, select_value_picks
 from .auction import annotate_players, load_history, measure_predictions
 from .cache import Cache
-from .captains import budget_map, resolve_budgets
+from .captains import budget_map, load_official_teams
 from .esports import load_ticketed_histories
 from .fetch import (apply_mmr_baseline, fetch_player_sections,
                     players_from_snapshot, signup_delta)
 from .heroes import load_hero_map
-from .ld2l import scrape_budgets, scrape_signups
+from .ld2l import scrape_signups
 from .opendota import OpenDota
 from .report_html import generate_dashboard
 from .report_player_html import generate_player_reports, report_filenames
@@ -98,18 +98,19 @@ def run_scout(args):
     print("\n" + "=" * 60)
     print("  Generating reports...")
     print("=" * 60)
-    # Team budgets: scraped from the season teams page ("Total Money") once
-    # teams are posted; budgets.json entries override scraped values. captains
-    # module owns both derivations.
-    teams = [] if args.offline else scrape_budgets(args.season)
+    # Dashboard and mock mode share the same validated, season-scoped official
+    # roster loader. Online runs refresh it; offline regeneration retains the
+    # last valid website budgets. budgets.json remains the final override.
+    teams, roster_from, budgets_err = load_official_teams(
+        args.season, cache, offline=args.offline
+    )
     if teams:
-        print(f"  💵 Team budgets from ld2l.org ({len(budget_map(teams))} teams): "
+        print(f"  💵 Team budgets from {roster_from} "
+              f"({len(budget_map(teams))} teams): "
               + ", ".join(f"{t['captain']} ${t['budget']}" for t in teams[:10]))
-    budgets, manual_count, budgets_err = resolve_budgets(teams)
     if budgets_err:
-        print(f"  ⚠ budgets.json ignored: {budgets_err}")
-    elif manual_count:
-        print(f"  💵 budgets.json overrides applied for {manual_count} captains")
+        print(f"  ⚠ {budgets_err}")
+    budgets = budget_map(teams)
 
     generate_spreadsheet(all_data, xlsx_out)
     report_map = None

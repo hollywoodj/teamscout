@@ -585,6 +585,17 @@ class PricingTests(unittest.TestCase):
         self.assertIn("PRICING_VECTORS", page)        # fixture embedded
         self.assertNotIn("{{", page)                  # every marker filled in
 
+    def test_budget_only_captain_maps_to_signup_steam_id(self):
+        from scout.report_html import _captain_id_map
+        all_data = [{
+            "player": {"name": "champ0044", "steam32": 154288911},
+            "data": {},
+        }]
+
+        result = _captain_id_map(all_data, {" CHAMP0044 ": 260})
+
+        self.assertEqual(result, {" CHAMP0044 ": 154288911})
+
 
 class CaptainsTests(unittest.TestCase):
     """Captain/budget derivations now live in one module (scout.captains),

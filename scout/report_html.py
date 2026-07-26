@@ -12,6 +12,7 @@ from urllib.parse import quote
 
 from . import config, pricing
 from .analysis import value_tier
+from .captains import normalized_name
 from .report_xlsx import db_url, ld2l_url, od_url, steam_url
 
 # The premium algorithm's cross-language contract: the dashboard's JS reprice
@@ -67,6 +68,21 @@ def _fmt_form(form):
     if not form:
         return ""
     return f"{form['winrate']}% ({form['games']}g)"
+
+
+def _captain_id_map(all_data, budgets):
+    """Map budget-row names to unambiguous signup Steam32 IDs."""
+    by_name = {}
+    for pd in all_data:
+        player = pd["player"]
+        by_name.setdefault(normalized_name(player.get("name")), []).append(player)
+
+    result = {}
+    for captain in budgets or {}:
+        matches = by_name.get(normalized_name(captain), [])
+        if len(matches) == 1:
+            result[captain] = int(matches[0]["steam32"])
+    return result
 
 
 def _player_record(pd):
@@ -170,6 +186,10 @@ def generate_dashboard(players_with_data, output_file, season_label, season_id,
         records.append(rec)
     payload = json.dumps(records, ensure_ascii=False).replace("</", "<\\/")
     budgets_payload = json.dumps(budgets or {}, ensure_ascii=False).replace("</", "<\\/")
+    captain_ids_payload = json.dumps(
+        _captain_id_map(players_with_data, budgets or {}),
+        ensure_ascii=False,
+    ).replace("</", "<\\/")
     now = datetime.now()
     gen_date = f"{now.month}/{now.day}/{now.year % 100}"
     html = (TEMPLATE
@@ -177,6 +197,7 @@ def generate_dashboard(players_with_data, output_file, season_label, season_id,
             .replace("{{SEASON_ID}}", str(season_id))
             .replace("{{GENERATED}}", gen_date)
             .replace("{{BUDGETS}}", budgets_payload)
+            .replace("{{CAPTAIN_IDS}}", captain_ids_payload)
             .replace("{{RANKICONS}}", json.dumps(_rank_icon_uris(offline=offline)))
             .replace("{{PRICING}}", json.dumps(pricing.pricing_payload()))
             .replace("{{PRICINGVECTORS}}", _pricing_vectors_json())
@@ -849,6 +870,7 @@ tr.onblock .pname { font-weight: 700; }
 <script>
 const DATA = {{DATA}};
 const BUDGETS = {{BUDGETS}};
+const CAPTAIN_IDS = {{CAPTAIN_IDS}};
 const RANK_ICONS = {{RANKICONS}};
 const SEASON = "{{SEASON_ID}}";
 const LSKEY = "ld2l-draft2-s" + SEASON;
@@ -1967,7 +1989,17 @@ document.getElementById("exportcaps").addEventListener("click", ()=>{
   });
   // any budget-only captain names (scraped teams with no marked signup row)
   captainList().forEach(name => {
-    if (!seen.has(name)) rows.push({name, steam32: null, budget: teamBudget(name), pos: null});
+    if (!seen.has(name)){
+      const steam32 = CAPTAIN_IDS[name] ?? null;
+      const player = steam32 == null ? null : DATA.find(p => p.id === steam32);
+      const roles = player ? manualRoles[player.id] : null;
+      rows.push({
+        name,
+        steam32,
+        budget: teamBudget(name),
+        pos: (roles && roles.length) ? roles.slice().sort() : null,
+      });
+    }
   });
   if (!rows.length){
     alert("No captains marked yet. Use the C button on a player's row to mark captains first.");
@@ -2485,7 +2517,10 @@ function renderMockBar(){
   sp.classList.toggle("ff", (m.speed||1) > 1);
 
   const meT = (m.teams||[]).find(t=>t.is_me);
-  let status = meT ? `you: <b>${esc(m.me)}</b> · $${meT.budget} left · ${meT.slots_left} slots` : "";
+  const rosterLabel = m.roster_source === "official" ? "Official" : "Curated";
+  let status = `Roster: <b>${rosterLabel}</b>`;
+  if (meT)
+    status += ` · you: <b>${esc(m.me)}</b> · $${meT.budget} left · ${meT.slots_left} slots`;
   if (meT && (meT.open_pos||[]).length)
     status += ` · need <b>P${meT.open_pos.join("/P")}</b>`;
   if ((m.speed||1) > 1)
