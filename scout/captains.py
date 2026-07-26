@@ -13,9 +13,40 @@ and reads the local ``budgets.json`` override file.
 
 import os
 
+from . import config
 from .user_config import load_budget_overrides
 
 OVERRIDES_FILE = "budgets.json"
+
+
+def normalized_name(value):
+    """Canonical form for matching a team captain to a signup player."""
+    return " ".join(str(value or "").split()).casefold()
+
+
+def resolve_team_identities(teams, players):
+    """Fill missing team Steam IDs from an unambiguous normalized name match.
+
+    Rows that still cannot be identified are returned separately instead of
+    being allowed to act as a bidder while their signup remains draftable.
+    """
+    by_name = {}
+    for player in players:
+        by_name.setdefault(normalized_name(player.get("name")), []).append(player)
+
+    resolved, unresolved = [], []
+    for source in teams:
+        row = dict(source)
+        if not row.get("steam64"):
+            matches = by_name.get(normalized_name(row.get("captain")), [])
+            if len(matches) != 1:
+                unresolved.append(row.get("captain") or "")
+                continue
+            row["steam64"] = (
+                int(matches[0]["steam32"]) + config.STEAM64_OFFSET
+            )
+        resolved.append(row)
+    return resolved, unresolved
 
 
 def captain_map(teams):
@@ -68,3 +99,53 @@ def override_team_budgets(teams, path=OVERRIDES_FILE):
         if t.get("captain") in manual:
             t["budget"] = manual[t["captain"]]
     return len(manual), err
+
+
+def _valid_official_rows(rows):
+    """Return copied official rows only when the whole response is usable."""
+    if not rows:
+        return []
+    valid = [
+        dict(row) for row in rows
+        if row.get("captain")
+        and row.get("steam64")
+        and isinstance(row.get("budget"), int)
+        and row["budget"] >= 0
+    ]
+    return valid if len(valid) == len(rows) else []
+
+
+def load_official_teams(season, cache, offline=False, fetcher=None,
+                        path=OVERRIDES_FILE):
+    """Load the season's authoritative teams, preferring live data.
+
+    A fully valid website response refreshes the season-scoped cache. Offline
+    runs and failed/partial fetches reuse that last valid snapshot. Manual
+    ``budgets.json`` entries are layered over either source after loading.
+    """
+    key = f"official_roster_s{season}"
+    rows, source = [], "missing"
+
+    if not offline:
+        if fetcher is None:
+            from .ld2l import scrape_budgets
+            fetcher = scrape_budgets
+        rows = _valid_official_rows(fetcher(season) or [])
+        if rows:
+            source = "website"
+            cache.set_blob(key, rows)
+
+    if not rows:
+        rows = _valid_official_rows(cache.get_blob(key) or [])
+        if rows:
+            source = "cache"
+
+    if not rows:
+        return (
+            [],
+            "missing",
+            "No valid official roster is available from the website or cache.",
+        )
+
+    _, error = override_team_budgets(rows, path=path)
+    return rows, source, error

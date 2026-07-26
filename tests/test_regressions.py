@@ -540,6 +540,71 @@ class CaptainsTests(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertEqual(teams[0]["budget"], 123)
 
+    def test_null_steam_id_resolves_by_normalized_player_name(self):
+        from scout.captains import resolve_team_identities
+        teams = [{"captain": "  CHAMP0044 ", "steam64": None,
+                  "team_id": None, "budget": 260}]
+        players = [{"name": "champ0044", "steam32": 154288911}]
+
+        rows, unresolved = resolve_team_identities(teams, players)
+
+        self.assertEqual(unresolved, [])
+        self.assertEqual(rows[0]["steam64"],
+                         154288911 + config.STEAM64_OFFSET)
+
+    def test_ambiguous_name_is_not_resolved(self):
+        from scout.captains import resolve_team_identities
+        teams = [{"captain": "Champ", "steam64": None, "budget": 260}]
+        players = [{"name": "champ", "steam32": 1},
+                   {"name": " CHAMP ", "steam32": 2}]
+
+        rows, unresolved = resolve_team_identities(teams, players)
+
+        self.assertEqual(rows, [])
+        self.assertEqual(unresolved, ["Champ"])
+
+    def test_official_loader_caches_rows_and_applies_budget_override(self):
+        from scout.captains import load_official_teams
+        with tempfile.TemporaryDirectory() as root:
+            cache = Cache(root)
+            override = os.path.join(root, "budgets.json")
+            with open(override, "w", encoding="utf-8") as f:
+                json.dump({"champ0044": 275}, f)
+            live = [{
+                "captain": "champ0044",
+                "steam64": 76561198114554639,
+                "team_id": "10",
+                "team": "Champ's team",
+                "budget": 260,
+                "unspent": 260,
+            }]
+
+            rows, source, error = load_official_teams(
+                53, cache, fetcher=lambda _: live, path=override)
+            cached, cached_source, cached_error = load_official_teams(
+                53, cache, offline=True, path=override)
+
+        self.assertIsNone(error)
+        self.assertEqual(source, "website")
+        self.assertEqual(rows[0]["budget"], 275)
+        self.assertIsNone(cached_error)
+        self.assertEqual(cached_source, "cache")
+        self.assertEqual(cached[0]["budget"], 275)
+
+    def test_official_loader_fails_without_live_or_cached_rows(self):
+        from scout.captains import load_official_teams
+        with tempfile.TemporaryDirectory() as root:
+            rows, source, error = load_official_teams(
+                53,
+                Cache(root),
+                fetcher=lambda _: [],
+                path=os.path.join(root, "budgets.json"),
+            )
+
+        self.assertEqual(rows, [])
+        self.assertEqual(source, "missing")
+        self.assertIn("official roster", error.lower())
+
 
 class BroadcastContractTests(unittest.TestCase):
     """The /live/state wire shape now has one home (scout.broadcast). Both the
