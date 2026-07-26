@@ -40,14 +40,14 @@ from http.server import ThreadingHTTPServer
 
 from . import config
 from .broadcast import SSEHub, draft_snapshot, make_handler
-from .captains import override_team_budgets
+from .captains import (load_official_teams, normalized_name,
+                       override_team_budgets, resolve_team_identities)
 from .analysis import position_ratings, value_tier
 from .auction import annotate_players, load_history
 from .cache import Cache
 from .fetch import fetch_player_sections, players_from_snapshot
 from .heroes import load_hero_map
 from .analysis import build_metrics, pool_analysis
-from .ld2l import scrape_budgets
 from .opendota import OpenDota
 from .user_config import load_target_sets
 
@@ -202,10 +202,6 @@ def _load_captains_file(all_data):
         })
     if not rows:
         return None, {}, removed
-    missing = [r["captain"] for r in rows if not r["_known"]]
-    if missing:
-        print(f"  ℹ Captains not in the cached pool (won't drop a pool slot): "
-              + ", ".join(missing))
     return rows, roles, removed
 
 
@@ -230,7 +226,7 @@ def _captains_from_signups(all_data):
     return rows
 
 
-def _load_pool(season, offline):
+def _load_pool(season, offline, roster_source="curated"):
     """Build (label, pool, captains_raw, by_steam).
 
     pool     — draftable players (captains removed), each a dict the UI/AI use
@@ -256,41 +252,60 @@ def _load_pool(season, offline):
     estimator = annotate_players(all_data, history)
     pool_analysis(all_data, price_estimator=estimator)
 
-    # Captains + budgets + the dashboard's role circles. Preferred source:
-    # captains.json exported from the dashboard (exactly the captains YOU curated
-    # via the C button, with their hand-set budgets, plus the roles map). Fall
-    # back to the scraped teams page only if it's absent, since that scrape can
-    # mis-tag roster players as captains.
-    captains_raw, roles_map, removed = _load_captains_file(all_data)
-    if captains_raw:
-        print(f"  👑 Captains from {config.MOCK_CAPTAINS_FILE}: "
-              + ", ".join(t["captain"] for t in captains_raw))
-        if roles_map:
-            print(f"  🎯 Dashboard roles for {len(roles_map)} players "
-                  f"(primary role signal)")
-        else:
-            print(f"  ⚠ No roles in {config.MOCK_CAPTAINS_FILE} — re-export from "
-                  f"the dashboard to use your role circles; falling back to "
-                  f"measured lanes only")
+    # Browser-only roles/removals are independent of captain authority. This
+    # keeps one dashboard/export bridge while preventing an old export from
+    # replacing a finalized website roster.
+    curated_rows, roles_map, removed = _load_captains_file(all_data)
+    if roles_map:
+        print(f"  🎯 Dashboard roles for {len(roles_map)} players "
+              f"(primary role signal)")
     else:
-        print(f"  ⚠ No {config.MOCK_CAPTAINS_FILE} — export it from the dashboard "
-              f"(⬇ Captains → mock) for your curated captains.")
-        # Fallback order: signup captain:yes (the same seed the dashboard uses,
-        # and the ONLY source that can't mis-tag a regular player as a captain),
-        # then the scraped teams page, then the last cached copy.
-        captains_raw = _captains_from_signups(all_data)
+        print(f"  ⚠ No roles in {config.MOCK_CAPTAINS_FILE} — falling back to "
+              f"measured lanes")
+
+    if roster_source == "official":
+        captains_raw, official_from, roster_err = load_official_teams(
+            season, cache, offline=offline
+        )
+        if roster_err:
+            print(f"  ⚠ {roster_err}")
         if captains_raw:
+            print(f"  👑 Official captains from {official_from}: "
+                  + ", ".join(t["captain"] for t in captains_raw))
+    else:
+        captains_raw = curated_rows or _captains_from_signups(all_data)
+        if curated_rows:
+            print(f"  👑 Curated captains from {config.MOCK_CAPTAINS_FILE}: "
+                  + ", ".join(t["captain"] for t in captains_raw))
+        elif captains_raw:
             print(f"  👑 Using signup captain:yes as captains: "
                   + ", ".join(t["captain"] for t in captains_raw))
         else:
-            captains_raw = scrape_budgets(season) if not offline else None
-            if captains_raw:
-                cache.set_blob("team_budgets", captains_raw)
-            else:
-                captains_raw = cache.get_blob("team_budgets") or []
+            captains_raw, official_from, roster_err = load_official_teams(
+                season, cache, offline=offline
+            )
+            if roster_err:
+                print(f"  ⚠ {roster_err}")
+            elif captains_raw:
+                print(f"  👑 No curated captains; fallback from {official_from}: "
+                      + ", ".join(t["captain"] for t in captains_raw))
         _, budgets_err = override_team_budgets(captains_raw)
         if budgets_err:
             print(f"  ⚠ budgets.json ignored: {budgets_err}")
+
+    players_only = [pd["player"] for pd in all_data]
+    captains_raw, unresolved = resolve_team_identities(
+        captains_raw or [], players_only
+    )
+    if unresolved:
+        print("  ⚠ Unresolved captains excluded: " + ", ".join(unresolved))
+
+    # Official identities and budgets still use the captain's exported role
+    # circles when available.
+    for row in captains_raw:
+        s32 = int(row["steam64"]) - config.STEAM64_OFFSET
+        if roles_map.get(s32):
+            row["pos"] = roles_map[s32]
 
     captain_s32 = set()
     for t in captains_raw:
@@ -308,11 +323,14 @@ def _load_pool(season, offline):
               f"{config.MOCK_CAPTAINS_FILE}): " + ", ".join(dropped))
 
     pool = []
+    unresolved_names = {normalized_name(name) for name in unresolved}
     for pd in all_data:
         p, d = pd["player"], pd["data"]
         s32 = p["steam32"]
         if s32 in captain_s32:
             continue  # captains (from captains.json / teams page) aren't draftable
+        if normalized_name(p.get("name")) in unresolved_names:
+            continue  # ambiguous identity: neither bidder nor buyable player
         if s32 in removed:
             continue  # you took them off the draft — not in the auction at all
         slots = _player_slots(d, roles_map.get(s32))
@@ -549,11 +567,13 @@ def _save_targets(path, teams):
 # --------------------------------------------------------------------------
 
 class MockState:
-    def __init__(self, season, label, pool, captains_raw, by_steam, me):
+    def __init__(self, season, label, pool, captains_raw, by_steam, me,
+                 roster_source="curated"):
         self._lock = threading.RLock()
         self.hub = SSEHub()    # open SSE writers, fanned out by broadcast.py
         self.season = season
         self.label = label
+        self.roster_source = roster_source
         self.pool = {pl["steam32"]: pl for pl in pool}
         self.drafted = set()
         self.by_steam = by_steam
@@ -681,6 +701,7 @@ class MockState:
                      (self.teams[c] for c in self.order)]
             mock = {
                 "phase": self.phase,
+                "roster_source": self.roster_source,
                 "me": self.me,
                 "started": self.started.is_set(),
                 "paused": self.paused.is_set(),
@@ -1272,9 +1293,12 @@ def _reset_state(state):
 # Entry point
 # --------------------------------------------------------------------------
 
-def run_mock(html_path, season, me=None, port=8322, offline=False, open_browser=True):
+def run_mock(html_path, season, me=None, port=8322, offline=False,
+             open_browser=True, roster_source="curated"):
     print("\n🎲 Loading mock-draft pool from cache...")
-    label, pool, captains_raw, by_steam = _load_pool(season, offline)
+    label, pool, captains_raw, by_steam = _load_pool(
+        season, offline, roster_source=roster_source
+    )
     if not pool:
         print("  ✗ No cached player pool. Run the scout once first "
               "(python ld2l_scout.py), then start --mock.")
@@ -1286,8 +1310,15 @@ def run_mock(html_path, season, me=None, port=8322, offline=False, open_browser=
               "cached teams to fall back on either.)")
         return
 
-    state = MockState(season, label, pool, captains_raw, by_steam,
-                      me or config.MOCK_DEFAULT_ME)
+    state = MockState(
+        season,
+        label,
+        pool,
+        captains_raw,
+        by_steam,
+        me or config.MOCK_DEFAULT_ME,
+        roster_source=roster_source,
+    )
     atexit.register(lambda: _save_targets(state.targets_path, state.teams))
 
     # allow_reuse_address defaults to True, which on Windows lets a SECOND --mock

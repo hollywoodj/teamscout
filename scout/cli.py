@@ -217,7 +217,14 @@ def run_mock_mode(args):
     if not os.path.exists(html):
         print(f"  ✗ Dashboard not found: {html}")
         return
-    run_mock(html, args.season, me=args.me, port=args.port, offline=args.offline)
+    run_mock(
+        html,
+        args.season,
+        me=args.me,
+        port=args.port,
+        offline=args.offline,
+        roster_source=args.roster,
+    )
 
 
 def run_herodraft_mode(args):
@@ -231,7 +238,7 @@ def run_herodraft_mode(args):
     run_herodraft(args.season, port=port, offline=args.offline)
 
 
-def main():
+def build_parser():
     parser = argparse.ArgumentParser(description="LD2L Scouting Tool")
     parser.add_argument("--season", type=int, default=config.DEFAULT_SEASON_ID,
                         help=f"LD2L season id (default: {config.DEFAULT_SEASON_ID} = S22)")
@@ -258,6 +265,18 @@ def main():
                         help="Local MOCK draft: practice a full auction against "
                              "AI captains in the browser (offline-safe, nothing "
                              "sent to ld2l.org)")
+    parser.add_argument(
+        "--roster",
+        choices=("curated", "official"),
+        help="Captain/budget source for --mock (default: curated)",
+    )
+    parser.add_argument(
+        "--official-roster",
+        dest="roster",
+        action="store_const",
+        const="official",
+        help="Use finalized captains and budgets from the LD2L teams page",
+    )
     parser.add_argument("--herodraft", action="store_true",
                         help="Hero draft practice: Captains Mode pick/ban "
                              "(patch 7.40 order) against a bot that drafts "
@@ -265,7 +284,12 @@ def main():
     parser.add_argument("--me", type=str, default=config.MOCK_DEFAULT_ME,
                         help=f"Your captain seat for --mock (default: "
                              f"{config.MOCK_DEFAULT_ME}; changeable in the UI)")
-    args = parser.parse_args()
+    parser.set_defaults(roster="curated")
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
 
     def handle_sigint(sig, frame):
         print("\n\n👋 Scout shutting down. See you at the draft!")

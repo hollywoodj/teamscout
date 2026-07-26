@@ -209,6 +209,107 @@ class MockAuctionTests(unittest.TestCase):
         self.assertGreaterEqual(team.affordable(), config.MOCK_MIN_BID)
 
 
+class MockRosterSourceTests(unittest.TestCase):
+    def test_official_roster_overrides_stale_export_and_drops_champ_from_pool(self):
+        from scout import mockdraft
+
+        official = [{
+            "captain": "champ0044",
+            "steam64": config.STEAM64_OFFSET + 154288911,
+            "team_id": "10",
+            "team": "Champ's team",
+            "budget": 260,
+            "unspent": 260,
+        }]
+        curated = ([{
+            "captain": "champ0044",
+            "steam64": None,
+            "team_id": None,
+            "budget": 255,
+            "pos": None,
+        }], {154288911: [3, 4, 5]}, set())
+        players = [{
+            "name": "champ0044",
+            "steam32": 154288911,
+            "steam64": config.STEAM64_OFFSET + 154288911,
+            "mmr": 4178,
+            "captain": "N",
+        }, {
+            "name": "Player",
+            "steam32": 7,
+            "steam64": config.STEAM64_OFFSET + 7,
+            "mmr": 3000,
+            "captain": "N",
+        }]
+        fake_cache = mock.Mock()
+        fake_cache.get_blob.return_value = None
+
+        with mock.patch.object(mockdraft, "Cache", return_value=fake_cache), \
+             mock.patch.object(mockdraft, "OpenDota",
+                               return_value=mock.Mock()), \
+             mock.patch.object(mockdraft, "players_from_snapshot",
+                               return_value=("S22", players)), \
+             mock.patch.object(mockdraft, "load_hero_map",
+                               return_value=mock.Mock()), \
+             mock.patch.object(mockdraft, "fetch_player_sections",
+                               return_value=({}, 0)), \
+             mock.patch.object(
+                 mockdraft,
+                 "build_metrics",
+                 side_effect=lambda player, sections, heroes: {
+                     "adj_skill": player["mmr"],
+                     "worth_cost": 100,
+                     "est_cost": 90,
+                 },
+             ), \
+             mock.patch.object(mockdraft, "annotate_players",
+                               return_value=None), \
+             mock.patch.object(mockdraft, "pool_analysis"), \
+             mock.patch.object(mockdraft, "_load_captains_file",
+                               return_value=curated), \
+             mock.patch.object(mockdraft, "load_official_teams",
+                               return_value=(official, "website", None),
+                               create=True), \
+             mock.patch.object(mockdraft, "_player_slots",
+                               return_value={1: 3000}), \
+             mock.patch.object(mockdraft, "position_ratings",
+                               return_value={"primary": 1, "ratings": {}}), \
+             mock.patch.object(mockdraft, "value_tier", return_value="C"):
+            label, pool, captains, _ = mockdraft._load_pool(
+                53, True, roster_source="official")
+
+        self.assertEqual(label, "S22")
+        self.assertEqual(captains[0]["budget"], 260)
+        self.assertNotIn("champ0044", [player["name"] for player in pool])
+
+    def test_parser_accepts_official_roster_alias(self):
+        from scout.cli import build_parser
+
+        alias = build_parser().parse_args(["--mock", "--official-roster"])
+        curated = build_parser().parse_args(
+            ["--mock", "--roster", "curated"])
+
+        self.assertEqual(alias.roster, "official")
+        self.assertEqual(curated.roster, "curated")
+
+    def test_mock_snapshot_names_roster_source(self):
+        state = MockState(
+            53,
+            "S22",
+            [MockAuctionTests.player()],
+            [{"captain": "Me", "budget": 100,
+              "team_id": "1", "pos": [1]}],
+            {},
+            "Me",
+            roster_source="official",
+        )
+
+        self.assertEqual(
+            state.live_snapshot()["mock"]["roster_source"],
+            "official",
+        )
+
+
 class StatsTests(unittest.TestCase):
     """scout.stats primitives — the untested foundation the skill ensemble and
     the family-wise hot/cold bar are built on."""
