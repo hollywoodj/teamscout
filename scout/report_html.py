@@ -1431,7 +1431,10 @@ function filtered(){
   const fitNeeds = document.getElementById("fitneeds").classList.contains("on");
   return DATA.filter(p=>{
     if (q && !(p.name.toLowerCase().includes(q) || (p.statement||"").toLowerCase().includes(q))) return false;
-    if (hideCaptains && isCaptain(p.id)) return false;
+    // A mock is an auction surface, so effective server captains never render
+    // as player rows. On the normal scouting dashboard this remains controlled
+    // by the user's "hide captains" checkbox.
+    if ((MOCKMODE || hideCaptains) && isCaptain(p.id)) return false;
     // keep drafted-but-unassigned players visible until the feed names the
     // winning team; they drop out of the list once it lands
     if (hideDrafted && isDrafted(p.id) && draftInfo[p.id].t) return false;
