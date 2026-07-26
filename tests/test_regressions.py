@@ -29,7 +29,12 @@ from scout.heroes import load_hero_map
 from scout.herodraft import load_meta
 from scout.herodraft_html import render_page
 from scout.live import LiveState
-from scout.mockdraft import MockState, _next_nominator, _resolve_sale
+from scout.mockdraft import (
+    MockState,
+    _next_nominator,
+    _resolve_sale,
+    _run_open_auction,
+)
 from scout.user_config import load_budget_overrides, load_target_sets
 
 
@@ -224,6 +229,92 @@ class MockAuctionTests(unittest.TestCase):
 
         self.assertEqual(state.order, ["Low A", "Low B", "Mid", "High"])
         self.assertEqual(_next_nominator(state), "Low A")
+
+    def test_speed_change_during_ai_wait_preserves_bid_opportunities(self):
+        from scout import mockdraft
+
+        class Clock:
+            now = 100.0
+
+            @classmethod
+            def advance(cls, seconds):
+                cls.now += seconds
+
+        class Switch:
+            changed = False
+
+        class FakeStop:
+            def __init__(self, state, switch):
+                self.state = state
+                self.switch = switch
+
+            def is_set(self):
+                return False
+
+            def wait(self, seconds):
+                if self.switch and not Switch.changed:
+                    Switch.changed = True
+                    self.state.set_speed(8)
+                Clock.advance(seconds)
+                return False
+
+        class FakeTimingEvent:
+            def __init__(self, state, switch):
+                self.state = state
+                self.switch = switch
+                self.pending = False
+
+            def clear(self):
+                self.pending = False
+
+            def set(self):
+                self.pending = True
+
+            def wait(self, timeout):
+                if self.switch and not Switch.changed:
+                    Clock.advance(min(0.05, timeout))
+                    Switch.changed = True
+                    self.state.set_speed(8)
+                    return True
+                Clock.advance(timeout)
+                return self.pending
+
+        def opportunities(switch):
+            Clock.now = 100.0
+            Switch.changed = False
+            state = MockState(
+                53,
+                "S22",
+                [self.player(worth=100)],
+                [
+                    {"captain": "A", "budget": 500,
+                     "team_id": "1", "pos": [1]},
+                    {"captain": "B", "budget": 500,
+                     "team_id": "2", "pos": [2]},
+                ],
+                {},
+                "A",
+            )
+            state._timing_changed = FakeTimingEvent(state, switch)
+            stop = FakeStop(state, switch)
+            rounds = []
+            with mock.patch.object(
+                mockdraft.time, "time", side_effect=lambda: Clock.now
+            ), mock.patch.object(
+                mockdraft.time, "monotonic", side_effect=lambda: Clock.now
+            ), mock.patch.object(
+                mockdraft,
+                "_ai_bid_round",
+                side_effect=lambda current: rounds.append(Clock.now),
+            ):
+                if not switch:
+                    state.set_speed(8)
+                state._open_auction(state.pool[10], 1, "A")
+                _run_open_auction(state, stop)
+            return len(rounds)
+
+        self.assertEqual(opportunities(switch=False), 6)
+        self.assertEqual(opportunities(switch=True), 6)
 
 
 class MockRosterSourceTests(unittest.TestCase):

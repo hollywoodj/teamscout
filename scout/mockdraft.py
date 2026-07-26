@@ -622,6 +622,7 @@ class MockState:
         # brakes back to 1x when a player you HAVEN'T cut (✕) comes up. `cuts` is
         # a copy of the dashboard's localStorage cut list, pushed by the page.
         self.speed = 1.0
+        self._timing_changed = threading.Event()
         self.cuts = set()
 
     # ---- seat ----
@@ -861,6 +862,7 @@ class MockState:
             if new == old:
                 return old
             self.speed = new
+            self._timing_changed.set()
             ratio = old / new
             fields = {"speed": new}
             if self.paused.is_set():
@@ -1094,6 +1096,23 @@ def _resolve_sale(state):
         state.high_bidder = None
 
 
+def _wait_scaled_interval(state, stop, seconds):
+    """Wait `seconds` of logical 1x time, adapting to live speed changes."""
+    remaining = max(0.0, float(seconds))
+    while remaining > 1e-9:
+        if stop.is_set() or state.reset_flag.is_set() or state.paused.is_set():
+            return False
+        with state._lock:
+            state._timing_changed.clear()
+            speed = state.speed
+        started = time.monotonic()
+        timeout = min(remaining / speed, 0.1)
+        state._timing_changed.wait(timeout)
+        elapsed = max(0.0, time.monotonic() - started)
+        remaining = max(0.0, remaining - elapsed * speed)
+    return True
+
+
 def _run_open_auction(state, stop):
     while not stop.is_set() and not state.reset_flag.is_set():
         with state._lock:
@@ -1108,7 +1127,7 @@ def _run_open_auction(state, stop):
         _ai_bid_round(state)
         # scaled in lockstep with the bid window, so the expected number of
         # raises per auction — and therefore the sale price — is unchanged
-        stop.wait(state.scale(config.MOCK_AI_TICK))
+        _wait_scaled_interval(state, stop, config.MOCK_AI_TICK)
 
 
 def _countdown(state, stop):

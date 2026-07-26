@@ -270,7 +270,9 @@ big jumps (tune `MOCK_BID_STEPS` / `MOCK_AI_TICK` in `config.py`). Put a player
 buttons on any auction. You can assign each captain (yours or an opponent's) a set
 of **🎯 target players** they should chase harder — targets persist to
 `mock_targets.json` and reload next time. Run it as many times as you like;
-**Reset** restarts the draft while keeping targets and your seat.
+**Reset** restarts the draft while keeping targets and your seat. Changing speed
+during an auction preserves the same AI bidding opportunities; it changes elapsed
+time, not expected sale prices.
 
 During the auction, `--live` (or `--mock`) marks players drafted and fills in the
 price paid + winning team from the draft feed — market totals, the Draft board
