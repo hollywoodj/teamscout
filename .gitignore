@@ -1,6 +1,14 @@
 *.xlsx
 *.html
+scout_reports/
 scout_log.txt
 cache/
 __pycache__/
 *.pyc
+mock_targets.json
+budgets.json
+herodraft_teams.json
+
+# Installed agent skills (mattpocock/skills)
+.agents/
+.claude/

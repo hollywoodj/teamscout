@@ -2,12 +2,18 @@
 
 import json
 import os
+import tempfile
+import threading
 import time
+from contextlib import contextmanager
 
 from . import config
 
 
 class Cache:
+    _locks_guard = threading.Lock()
+    _locks = {}
+
     def __init__(self, root=None):
         self.root = root or config.CACHE_DIR
         os.makedirs(os.path.join(self.root, "players"), exist_ok=True)
@@ -22,18 +28,92 @@ class Cache:
         except (OSError, ValueError):
             return None
 
+    @classmethod
+    def _thread_lock(cls, path):
+        key = os.path.abspath(path)
+        with cls._locks_guard:
+            return cls._locks.setdefault(key, threading.RLock())
+
+    @contextmanager
+    def _file_lock(self, path):
+        """Serialize read/modify/write cycles across threads and processes."""
+        thread_lock = self._thread_lock(path)
+        with thread_lock:
+            lock_path = path + ".lock"
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            with open(lock_path, "a+b") as lock_file:
+                lock_file.seek(0, os.SEEK_END)
+                if lock_file.tell() == 0:
+                    lock_file.write(b"\0")
+                    lock_file.flush()
+                lock_file.seek(0)
+                try:
+                    import msvcrt
+                except ImportError:
+                    import fcntl
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                    try:
+                        yield
+                    finally:
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                else:
+                    deadline = time.monotonic() + 10
+                    while True:
+                        try:
+                            lock_file.seek(0)
+                            msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                            break
+                        except OSError:
+                            if time.monotonic() >= deadline:
+                                raise
+                            time.sleep(0.05)
+                    try:
+                        yield
+                    finally:
+                        lock_file.seek(0)
+                        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+
+    @staticmethod
+    def _replace_with_retry(src, dst):
+        for attempt in range(6):
+            try:
+                os.replace(src, dst)
+                return
+            except PermissionError:
+                if attempt == 5:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+
+    def _write_json_unlocked(self, path, data):
+        directory = os.path.dirname(path) or "."
+        os.makedirs(directory, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(
+            dir=directory,
+            prefix=os.path.basename(path) + ".",
+            suffix=".tmp",
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+                f.flush()
+                os.fsync(f.fileno())
+            self._replace_with_retry(tmp, path)
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
     def _write_json(self, path, data):
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f)
-        os.replace(tmp, path)
+        with self._file_lock(path):
+            self._write_json_unlocked(path, data)
 
     # ---- per-player sections ----
     def _player_path(self, steam32):
         return self._path("players", f"{steam32}.json")
 
     def get_section(self, steam32, section, max_age_hours, force=False):
-        """Return cached section data if fresh enough, else None."""
+        """Return cached section data if fresh enough (None = any age), else None."""
         if force:
             return None
         doc = self._read_json(self._player_path(steam32))
@@ -42,19 +122,21 @@ class Cache:
         entry = doc.get("sections", {}).get(section)
         if not entry:
             return None
-        age_h = (time.time() - entry.get("fetched_at", 0)) / 3600
-        if age_h > max_age_hours:
-            return None
+        if max_age_hours is not None:
+            age_h = (time.time() - entry.get("fetched_at", 0)) / 3600
+            if age_h > max_age_hours:
+                return None
         return entry.get("data")
 
     def set_section(self, steam32, section, data):
         path = self._player_path(steam32)
-        doc = self._read_json(path) or {}
-        doc.setdefault("sections", {})[section] = {
-            "fetched_at": time.time(),
-            "data": data,
-        }
-        self._write_json(path, doc)
+        with self._file_lock(path):
+            doc = self._read_json(path) or {}
+            doc.setdefault("sections", {})[section] = {
+                "fetched_at": time.time(),
+                "data": data,
+            }
+            self._write_json_unlocked(path, doc)
 
     # ---- generic named blobs (hero constants, signup snapshots) ----
     def get_blob(self, name, max_age_hours=None):

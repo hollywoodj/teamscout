@@ -43,13 +43,13 @@ class HeroMap:
         return self.mapping.get(hero_id, f"Hero#{hero_id}")
 
 
-def load_hero_map(od, cache):
+def load_hero_map(od, cache, offline=False):
     """Fresh cache -> API -> stale cache -> bundled fallback."""
     cached = cache.get_blob("heroes", max_age_hours=config.HEROES_CONSTANTS_TTL_HOURS)
     if cached:
         return HeroMap({int(k): v for k, v in cached.items()})
 
-    constants = od.constants_heroes()
+    constants = None if offline else od.constants_heroes()
     if constants and isinstance(constants, dict):
         mapping = {}
         for k, h in constants.items():

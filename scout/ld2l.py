@@ -121,14 +121,18 @@ def scrape_budgets(season_id):
     for row in re.findall(r"<tr>(.*?)</tr>", r.text, re.S):
         cap = re.search(r'data-title="([^"]*)"', row)
         sid = re.search(r'data-hovercard-id="(\d+)"', row)
-        name = re.search(r'href="/teams/about/\d+">([^<]*)', row)
+        name = re.search(r'href="/teams/about/(\d+)">([^<]*)', row)
         money = re.findall(r"\$(\d+)", row)
         if not (cap and money):
             continue
         teams.append({
             "captain": unescape(cap.group(1)).strip(),
             "steam64": int(sid.group(1)) if sid else None,
-            "team": unescape(name.group(1)).strip() if name else "",
+            # team_id is the site's internal id — it's what the draft page's
+            # data-team attribute carries, so the live follower can map a pick
+            # to the winning captain
+            "team_id": name.group(1) if name else None,
+            "team": unescape(name.group(2)).strip() if name else "",
             "budget": int(money[0]),
             "unspent": int(money[1]) if len(money) > 1 else None,
         })

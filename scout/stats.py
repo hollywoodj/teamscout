@@ -1,0 +1,83 @@
+"""Small statistical primitives (stdlib only).
+
+Everything here is deliberately simple and transparent: captains need to be
+able to trust (and argue with) every number on the scouting board.
+"""
+
+import math
+import statistics
+
+
+def binom_z(wins, n):
+    """Approximate z-score of a W/L record against a fair 50% coin.
+
+    z = (wins - n/2) / (sqrt(n)/2).  |z| >= 1.65 is ~90% two-sided evidence
+    the record isn't luck. Normal approximation — fine for n >= 10.
+    """
+    if not n or n < 1:
+        return None
+    return (wins - n / 2) / (math.sqrt(n) / 2)
+
+
+MIN_PEERS_FOR_Z = 10  # MAD below this is mostly noise (see robust_z)
+
+
+def family_z(n_tests, family_alpha=0.10):
+    """Two-sided z bar holding the FAMILY-wise error rate across n_tests.
+
+    A 1.65 cutoff is calibrated for testing one player. Run the same test over
+    a 100-player pool and ~10 clear it on luck alone. Bonferroni splits the
+    budget: family_alpha becomes the chance of ANY false flag on the board,
+    not the chance per player. Returns None for n_tests < 1.
+    """
+    if n_tests < 1:
+        return None
+    return statistics.NormalDist().inv_cdf(1 - family_alpha / n_tests / 2)
+
+
+def robust_z(x, peer_values):
+    """z-score of x against peers using median/MAD (outlier-resistant).
+
+    Needs MIN_PEERS_FOR_Z peers: a MAD built from a handful of points is
+    itself mostly noise, and it sits in the denominator — one accidentally
+    tight peer group manufactures a huge z. Returns None when there aren't
+    enough peers or the peers have no spread.
+    """
+    if x is None or len(peer_values) < MIN_PEERS_FOR_Z:
+        return None
+    med = statistics.median(peer_values)
+    mad = statistics.median(abs(v - med) for v in peer_values)
+    if mad == 0:
+        return None
+    return 0.6745 * (x - med) / mad
+
+
+def ivw_mean(estimates):
+    """Inverse-variance weighted mean of (value, sigma) pairs.
+
+    Returns (mean, combined_sigma) or (None, None) if no usable estimates.
+    """
+    pairs = [(v, s) for v, s in estimates if v is not None and s]
+    if not pairs:
+        return None, None
+    wsum = sum(1 / s ** 2 for _, s in pairs)
+    mean = sum(v / s ** 2 for v, s in pairs) / wsum
+    return mean, math.sqrt(1 / wsum)
+
+
+def wilson_lower(wins, n, z=1.28):
+    """Wilson score lower bound for a win probability (default ~90% one-sided).
+
+    'Their solo WR is at least X%' with sample size baked in.
+    """
+    if not n:
+        return None
+    p = wins / n
+    denom = 1 + z ** 2 / n
+    centre = p + z ** 2 / (2 * n)
+    spread = z * math.sqrt(p * (1 - p) / n + z ** 2 / (4 * n ** 2))
+    return (centre - spread) / denom
+
+
+def clamp(x, lo, hi):
+    return max(lo, min(hi, x))

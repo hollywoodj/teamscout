@@ -64,5 +64,22 @@ class OpenDota:
     def matches(self, sid, **params):
         return self.get(f"/players/{sid}/matches", params=params)
 
+    def wordcloud(self, sid):
+        return self.get(f"/players/{sid}/wordcloud")
+
+    def explorer(self, sql):
+        payload = self.get("/explorer", params={"sql": sql})
+        if not isinstance(payload, dict) or not isinstance(payload.get("rows"), list):
+            return None
+        return payload["rows"]
+
     def constants_heroes(self):
         return self.get("/constants/heroes")
+
+    def hero_stats(self):
+        """Current-patch pub pick/win counts per hero, split by rank bracket."""
+        return self.get("/heroStats")
+
+    def hero_matchups(self, hero_id):
+        """Per-opponent games/wins for one hero (organized-match sample)."""
+        return self.get(f"/heroes/{hero_id}/matchups")

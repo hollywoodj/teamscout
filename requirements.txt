@@ -1,2 +1,8 @@
 requests
 openpyxl
+# Optional, for --live mode's "on the block" banner (the site runs socket.io v2,
+# which needs the 4.x python client). Without these, --live still auto-marks
+# completed picks via polling — you just don't see nominations/bids.
+python-socketio<5
+python-engineio<4
+websocket-client

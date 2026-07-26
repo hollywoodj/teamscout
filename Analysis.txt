@@ -1,0 +1,1 @@
+Print out a list and summary of all statical analysis used in this project. Make it easy to understand. Show alternative methods the can be used so i can make informed decisions and understand the analysis methodology. Use graphs if possible

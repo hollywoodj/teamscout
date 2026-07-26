@@ -5,7 +5,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from . import config
-from .analysis import is_strong_value_signal, value_pick_signals, value_tier
+from .analysis import measured_roles, select_value_picks, value_tier
 
 HDR_FONT = Font(bold=True, color="FFFFFF", name="Arial", size=10)
 HDR_FILL = PatternFill("solid", fgColor="1F1F1F")
@@ -28,9 +28,6 @@ ROW_TINT_CAPTAIN_M = PatternFill("solid", fgColor="FFF2CC")
 ROW_TINT_INACTIVE = PatternFill("solid", fgColor="FFF3CD")
 GREEN_FILL = PatternFill("solid", fgColor="C6EFCE")
 BLUE_FILL = PatternFill("solid", fgColor="D9E2F3")
-
-TIER_COLORS = {"S": "FFD700", "A": "C0C0C0", "B": "CD7F32", "C": "87CEEB",
-               "D": "98FB98", "E": "DDA0DD", "F": "D3D3D3"}
 
 
 def _safe(val):
@@ -77,6 +74,10 @@ def ld2l_url(p):
     return f"{config.LD2L_BASE}/profile/{p['steam64']}"
 
 
+def steam_url(p):
+    return f"https://steamcommunity.com/profiles/{p['steam64']}"
+
+
 def _board_columns():
     """(header, width, getter, wrap) for the main Scouting Board sheet."""
     return [
@@ -85,15 +86,22 @@ def _board_columns():
         ("Captain",               9,  lambda i, p, d: p["captain"], False),
         ("Draftable",            10,  lambda i, p, d: p["draftable"], False),
         ("Vouched",               9,  lambda i, p, d: p["vouched"], False),
+        ("Private?",              9,  lambda i, p, d: "🔒 yes" if d["private_profile"] else "", False),
         ("New?",                  7,  lambda i, p, d: "🆕" if p.get("is_new") else "", False),
-        ("Listed MMR",           10,  lambda i, p, d: p["mmr"], False),
+        ("Website MMR",          10,  lambda i, p, d: p["mmr"], False),
         ("OD Rank",              14,  lambda i, p, d: d["rank_str"], False),
+        ("Plays Like",           11,  lambda i, p, d: d["adj_skill"] if d["adj_skill"] is not None else "—", False),
+        ("Gap",                   9,  lambda i, p, d: "★unrated" if d["listed_suspect"]
+                                                      else (d["value_gap"] if d["value_gap"] is not None else "—"), False),
+        ("Edge$",                 8,  lambda i, p, d: d["edge_cost"] if d["edge_cost"] is not None else "—", False),
+        ("Value Tier",           16,  lambda i, p, d: value_tier(d), False),
         ("MMR Check",            20,  lambda i, p, d: d["mmr_check"], False),
         ("Est. Cost",             9,  lambda i, p, d: d["est_cost"] if d["est_cost"] is not None else "—", False),
         ("Last Cost",            18,  lambda i, p, d: _last_cost_str(d), False),
-        ("Pos Prefs (1-5)",      13,  lambda i, p, d: "/".join(map(str, p["pos_prefs"])), False),
-        ("Pref Pos",             10,  lambda i, p, d: p["pref_role"], False),
+        ("Roles (from lanes)",   14,  lambda i, p, d: "/".join(f"P{r}" for r in measured_roles(d)) or "—", False),
         ("Actual Lanes (6mo)",   24,  lambda i, p, d: d["lane_str"], False),
+        ("Server (3mo)",         18,  lambda i, p, d: d["server_mix"] or "—", False),
+        ("East Win% (6mo)",      13,  lambda i, p, d: f"{d['use_wr']}% ({d['use_n']}g)" if d["use_n"] else "—", False),
         ("Win%",                  7,  lambda i, p, d: d["winrate"], False),
         ("W",                     6,  lambda i, p, d: d["wins"], False),
         ("L",                     6,  lambda i, p, d: d["losses"], False),
@@ -109,6 +117,7 @@ def _board_columns():
         ("Recent Heroes (last 10)", 40, lambda i, p, d: ", ".join(d["recent_heroes"][:10]), True),
         ("Signature Heroes (100g/53%+)", 38, lambda i, p, d: _sig_str(d), True),
         ("Median Lobby Rank",    14,  lambda i, p, d: d["lobby_rank_str"], False),
+        ("MMR Δ Signup",         12,  lambda i, p, d: (f"{d['mmr_climb']:+d}" if d["mmr_climb"] else "—"), False),
         ("Punches Up?",          11,  lambda i, p, d: "✅ YES" if d["punches_above"] else "", False),
         ("Solo %",                8,  lambda i, p, d: d["solo_pct"] if d["solo_pct"] is not None else "—", False),
         ("Solo WR",               9,  lambda i, p, d: d["solo_wr"] if d["solo_wr"] is not None else "—", False),
@@ -116,13 +125,13 @@ def _board_columns():
         ("League Games (6mo)",   11,  lambda i, p, d: d["league_matches"] or "—", False),
         ("League W%",            10,  lambda i, p, d: d["league_winrate"] if d["league_matches"] else "—", False),
         ("League Heroes",        35,  lambda i, p, d: ", ".join(d["league_heroes"][:8]) or "—", True),
-        ("Value Tier",           20,  lambda i, p, d: value_tier(p["mmr"], d), False),
         ("Your Rating",          10,  lambda i, p, d: "", False),
         ("Draft Target Rd",      12,  lambda i, p, d: "", False),
         ("Notes",                30,  lambda i, p, d: "", True),
         ("Dotabuff",             38,  lambda i, p, d: db_url(p), False),
         ("OpenDota",             38,  lambda i, p, d: od_url(p), False),
         ("LD2L",                 30,  lambda i, p, d: ld2l_url(p), False),
+        ("Steam",                38,  lambda i, p, d: steam_url(p), False),
         ("Statement",            50,  lambda i, p, d: p["statement"], True),
     ]
 
@@ -186,6 +195,33 @@ def _build_board(ws, sorted_players):
         elif d["mmr_check"]:
             cell_at("MMR Check").font = RED_FONT
 
+        if d["listed_suspect"]:
+            cell_at("Gap").font = Font(name="Arial", size=9, bold=True, color="B25F00")
+            cell_at("Gap").fill = PatternFill("solid", fgColor="FFF2CC")
+        elif d["value_gap"] is not None and d["value_gap"] >= config.VALUE_GAP_MMR:
+            cell_at("Gap").font = GREEN_BOLD
+            cell_at("Gap").fill = GREEN_FILL
+        elif d["value_gap"] is not None and d["value_gap"] <= -config.VALUE_GAP_MMR:
+            cell_at("Gap").font = RED_FONT
+        if d["edge_cost"] is not None and d["edge_cost"] >= 20:
+            cell_at("Edge$").font = GREEN_BOLD
+
+        tier = value_tier(d)
+        if tier.startswith(("S", "A")):
+            cell_at("Value Tier").font, cell_at("Value Tier").fill = GREEN_BOLD, GREEN_FILL
+        elif tier.startswith("B"):
+            cell_at("Value Tier").font = GREEN_BOLD
+        elif tier.startswith(("E", "F")):
+            cell_at("Value Tier").font = RED_FONT
+        elif tier.startswith("★"):
+            cell_at("Value Tier").font = Font(name="Arial", size=9, bold=True, color="B25F00")
+            cell_at("Value Tier").fill = PatternFill("solid", fgColor="FFF2CC")
+
+        if d["climbing"]:
+            cell_at("MMR Δ Signup").font, cell_at("MMR Δ Signup").fill = GREEN_BOLD, GREEN_FILL
+        elif d["falling"]:
+            cell_at("MMR Δ Signup").font = RED_FONT
+
         if d["punches_above"]:
             cell_at("Punches Up?").fill = GREEN_FILL
             cell_at("Punches Up?").font = GREEN_BOLD
@@ -195,10 +231,6 @@ def _build_board(ws, sorted_players):
             cell_at("League Games (6mo)").fill = BLUE_FILL
             cell_at("League Games (6mo)").font = BOLD_FONT
 
-        tier = cell_at("Value Tier").value or ""
-        if tier[:1] in TIER_COLORS:
-            cell_at("Value Tier").fill = PatternFill("solid", fgColor=TIER_COLORS[tier[0]])
-
         for header, url in (("Dotabuff", db_url(p)), ("OpenDota", od_url(p)), ("LD2L", ld2l_url(p))):
             cell_at(header).font = LINK_FONT
             cell_at(header).hyperlink = url
@@ -206,18 +238,16 @@ def _build_board(ws, sorted_players):
 
 def _build_by_role(ws, sorted_players):
     ws.sheet_properties.tabColor = "4472C4"
-    pos_names = {1: "Pos 1 (Carry)", 2: "Pos 2 (Mid)", 3: "Pos 3 (Offlane)",
-                 4: "Pos 4 (Soft Support)", 5: "Pos 5 (Hard Support)"}
-
-    def plays_pos(p, pos):
-        # rated 1-2, or it's their best-rated position (covers unfilled/odd forms)
-        return p["pos_prefs"][pos - 1] <= 2 or p["pos_prefs"][pos - 1] == min(p["pos_prefs"])
+    # Grouping is by MEASURED lanes (Safe/Mid/Off), not declared signup prefs.
+    # Supports (4/5) aren't inferable from lanes — set those in the dashboard.
+    pos_names = {1: "Pos 1 / Safe (Carry)", 2: "Pos 2 / Mid",
+                 3: "Pos 3 / Off", 4: "Pos 4 (Soft Support)", 5: "Pos 5 (Hard Support)"}
 
     groups = [(pos_names[pos],
-               [pd for pd in sorted_players if plays_pos(pd["player"], pos)])
+               [pd for pd in sorted_players if pos in measured_roles(pd["data"])])
               for pos in range(1, 6)]
-    groups.append(("Flexible (all positions)",
-                   [pd for pd in sorted_players if pd["player"]["pref_role"] == "Any"]))
+    groups.append(("No core lane / unknown (set roles in dashboard)",
+                   [pd for pd in sorted_players if not measured_roles(pd["data"])]))
 
     row = 1
     for group_name, group in groups:
@@ -263,38 +293,69 @@ def _build_by_role(ws, sorted_players):
 
 def _build_value_picks(ws, sorted_players):
     ws.sheet_properties.tabColor = "FF6347"
-    ws.cell(row=1, column=1, value="🔥 POTENTIAL VALUE PICKS - Players Who May Outperform Their MMR").font = \
+    ws.cell(row=1, column=1, value="🔥 VALUE BOARD — ranked by auction edge "
+            "(worth at true skill − expected price)").font = \
         Font(bold=True, size=13, name="Arial")
-    ws.merge_cells("A1:H1")
+    ws.merge_cells("A1:I1")
+    ws.cell(row=2, column=1, value="Plays Like = behavioral skill estimate (medal + ranked-lobby "
+            "median, momentum/rust adjusted). Signals are z-score based — they only fire when "
+            "statistically unusual for this pool.").font = \
+        Font(italic=True, name="Arial", size=9, color="666666")
+    ws.merge_cells("A2:I2")
 
-    headers = ["Player", "MMR", "Rank", "Win%", "Total Games", "KDA",
+    headers = ["Player", "Listed", "Plays Like", "Gap", "Est$", "Worth$", "Edge$",
                "Why They're Interesting", "Risk"]
     for c, h in enumerate(headers, 1):
         cell = ws.cell(row=3, column=c, value=h)
         cell.font, cell.fill, cell.alignment = HDR_FONT, PatternFill("solid", fgColor="CC3300"), HDR_ALIGN
 
-    picks = []
-    for pd in sorted_players:
-        reasons, risks = value_pick_signals(pd["player"], pd["data"])
-        if len(reasons) >= 2 or (reasons and is_strong_value_signal(pd["data"])):
-            picks.append((pd, reasons, risks))
+    picks, unrated = select_value_picks(sorted_players)
+
+    def num_or_dash(v, plus=False):
+        if v is None:
+            return "—"
+        return f"+{v}" if plus and v > 0 else v
 
     row = 4
-    for pd, reasons, risks in sorted(picks, key=lambda x: x[0]["player"]["mmr"]):
+    for pd, reasons, risks in picks:
         p, d = pd["player"], pd["data"]
-        vals = [p["name"], p["mmr"], d["rank_str"], d["winrate"], d["total_matches"],
-                d["avg_kda"], " | ".join(reasons), " | ".join(risks) if risks else "Low risk"]
+        vals = [p["name"], p["mmr"], num_or_dash(d["adj_skill"]),
+                num_or_dash(d["value_gap"], plus=True), num_or_dash(d["est_cost"]),
+                num_or_dash(d["worth_cost"]), num_or_dash(d["edge_cost"], plus=True),
+                " | ".join(reasons), " | ".join(risks) if risks else "Low risk"]
         for c, v in enumerate(vals, 1):
             cell = ws.cell(row=row, column=c, value=_safe(v))
             cell.font = BOLD_FONT if c == 1 else DATA_FONT
             cell.border = BORDER
             cell.fill = PatternFill("solid", fgColor="FFF0E0")
-            if c >= 7:
+            if c >= 8:
                 cell.alignment = WRAP
         ws.row_dimensions[row].height = 40
         row += 1
 
-    for c, w in {"A": 26, "B": 8, "C": 14, "D": 7, "E": 10, "F": 7, "G": 65, "H": 35}.items():
+    if unrated:
+        row += 1
+        ws.cell(row=row, column=1, value="❓ UNRATED SIGNUPS — placeholder listed MMR; expect a "
+                "re-rate before the draft (not a bargain, just unpriced)").font = \
+            Font(bold=True, size=11, name="Arial", color="B25F00")
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=9)
+        row += 1
+        for pd in unrated:
+            p, d = pd["player"], pd["data"]
+            vals = [p["name"], p["mmr"], num_or_dash(d["adj_skill"]),
+                    num_or_dash(d["value_gap"], plus=True), "", num_or_dash(d["worth_cost"]), "",
+                    d["skill_srcs"], d["skill_note"]]
+            for c, v in enumerate(vals, 1):
+                cell = ws.cell(row=row, column=c, value=_safe(v))
+                cell.font = BOLD_FONT if c == 1 else DATA_FONT
+                cell.border = BORDER
+                cell.fill = PatternFill("solid", fgColor="FFF2CC")
+                if c >= 8:
+                    cell.alignment = WRAP
+            row += 1
+
+    for c, w in {"A": 26, "B": 8, "C": 10, "D": 8, "E": 7, "F": 8, "G": 8,
+                 "H": 60, "I": 35}.items():
         ws.column_dimensions[c].width = w
 
 
@@ -307,20 +368,21 @@ def _build_signatures(ws, sorted_players):
             "or ban them against opponents.").font = Font(italic=True, name="Arial", size=9, color="666666")
     ws.merge_cells("A2:G2")
 
-    headers = ["Player", "MMR", "Hero", "Games", "Wins", "Win Rate", "Pref Pos"]
+    headers = ["Player", "MMR", "Hero", "Games", "Wins", "Win Rate", "Roles (lanes)"]
     for c, h in enumerate(headers, 1):
         cell = ws.cell(row=4, column=c, value=h)
         cell.font, cell.fill, cell.alignment, cell.border = \
             HDR_FONT, PatternFill("solid", fgColor="4A1A7A"), HDR_ALIGN, BORDER
 
-    all_sigs = [(pd["player"], sh)
+    all_sigs = [(pd["player"], pd["data"], sh)
                 for pd in sorted_players for sh in pd["data"]["signature_heroes"]]
-    all_sigs.sort(key=lambda x: (-x[1]["winrate"], -x[1]["games"]))
+    all_sigs.sort(key=lambda x: (-x[2]["winrate"], -x[2]["games"]))
 
     row = 5
-    for p, sh in all_sigs:
+    for p, d, sh in all_sigs:
         wr = sh["winrate"]
-        vals = [p["name"], p["mmr"], sh["hero"], sh["games"], sh["wins"], f"{wr}%", p["pref_role"]]
+        roles = "/".join(f"P{r}" for r in measured_roles(d)) or "—"
+        vals = [p["name"], p["mmr"], sh["hero"], sh["games"], sh["wins"], f"{wr}%", roles]
         for c, v in enumerate(vals, 1):
             cell = ws.cell(row=row, column=c, value=_safe(v))
             cell.border = BORDER
@@ -339,7 +401,7 @@ def _build_signatures(ws, sorted_players):
 
     row += 1
     ws.cell(row=row, column=1, value=f"Total signature heroes found: {len(all_sigs)}").font = BOLD_FONT
-    players_with = len({p["name"] for p, _ in all_sigs})
+    players_with = len({p["name"] for p, _, _ in all_sigs})
     ws.cell(row=row + 1, column=1,
             value=f"Players with at least one: {players_with}/{len(sorted_players)}").font = DATA_FONT
 
@@ -428,8 +490,9 @@ def _build_compare(ws):
         cell = ws.cell(row=3, column=c, value=h)
         cell.font, cell.fill = HDR_FONT, PatternFill("solid", fgColor="2D7D2D")
 
-    stats = ["Name", "Listed MMR", "OD Rank", "MMR Check", "Est. Cost", "Last Cost",
-             "Pos Prefs", "Actual Lanes",
+    stats = ["Name", "Listed MMR", "OD Rank", "Plays Like", "Gap", "Edge$",
+             "MMR Check", "Est. Cost", "Last Cost",
+             "Roles (from lanes)", "Actual Lanes",
              "Win%", "Form 30d", "Total Games", "Recent KDA", "Avg GPM", "Avg XPM",
              "Heroes Played", "Last Active (days)", "Median Lobby Rank", "Punches Up?",
              "Solo WR", "League Games", "League Win%", "Top Hero #1", "Top Hero #2",
@@ -451,7 +514,7 @@ def generate_spreadsheet(players_with_data, output_file):
     ws.title = "Scouting Board"
     _build_board(ws, sorted_players)
     _build_by_role(wb.create_sheet("By Role"), sorted_players)
-    _build_value_picks(wb.create_sheet("🔥 Value Picks"), sorted_players)
+    _build_value_picks(wb.create_sheet("🔥 Value Board"), sorted_players)
     _build_signatures(wb.create_sheet("🎯 Signature Heroes"), sorted_players)
     _build_lobby_intel(wb.create_sheet("🏆 Lobby & League Intel"), sorted_players)
     _build_compare(wb.create_sheet("Head-to-Head Compare"))

@@ -23,7 +23,11 @@ if ($existing) {
 
 # Build the task
 $action = New-ScheduledTaskAction -Execute $batPath -WorkingDirectory $scriptDir
-$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Hours 2) -RepetitionDuration (New-TimeSpan -Days 365)
+$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Hours 2) -RepetitionDuration (New-TimeSpan -Days 365)
+# An empty duration means "repeat indefinitely" in Task Scheduler. The cmdlet
+# requires a duration while constructing the trigger, so clear it afterward.
+$trigger.Repetition.Duration = ""
+$trigger.Repetition.StopAtDurationEnd = $false
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RunOnlyIfNetworkAvailable
 
 # Register it

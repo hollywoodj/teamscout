@@ -1,14 +1,83 @@
-"""Derived scouting signals from OpenDota raw data."""
+"""Derived scouting signals from OpenDota raw data.
+
+Two passes:
+  build_metrics(player, sections, hero_map)  — per-player signals
+  pool_analysis(all_data, price_estimator)   — pool-relative signals
+    (peer z-scores, auction worth/edge) that need every player fetched first
+
+The centrepiece is a "true skill" estimate built ONLY from behavioral data
+(medal + the ranked lobbies the player actually queues into), so it can be
+compared honestly against the listed draft MMR:  value_gap = skill - listed.
+OpenDota's computed_mmr is deliberately ignored — for sub-Immortal players it
+compresses everyone into ~3700-4300 (r≈0.5 with everything) and carries no
+signal for this pool.
+"""
 
 import statistics
 from datetime import datetime, timezone
 
-from . import config
+from . import config, hero_positions, toxicity
+from .stats import binom_z, clamp, family_z, ivw_mean, robust_z, wilson_lower
 
 MEDALS = {1: "Herald", 2: "Guardian", 3: "Crusader", 4: "Archon",
           5: "Legend", 6: "Ancient", 7: "Divine", 8: "Immortal"}
 
 LANE_NAMES = {1: "Safe", 2: "Mid", 3: "Off", 4: "Jungle"}
+
+# server region a match was played on, from its cluster id (Dota clusters group
+# by hundreds → region). Short codes; unknown clusters fall through to None.
+REGION_RANGES = [
+    (111, 120, "USW"), (121, 130, "USE"), (131, 140, "EU"), (141, 150, "JP"),
+    (151, 160, "SEA"), (161, 170, "ME"), (171, 180, "AU"), (181, 199, "EU"),
+    (200, 210, "SA"), (211, 220, "ZA"), (221, 240, "CN"), (241, 250, "SA"),
+    (251, 260, "SA"), (261, 270, "IN"), (271, 290, "SEA"),
+]
+
+
+def cluster_region(cluster):
+    if cluster is None:
+        return None
+    for lo, hi, short in REGION_RANGES:
+        if lo <= cluster <= hi:
+            return short
+    return None
+
+
+# Chat-toxicity scoring (lexicons + scan) lives in scout/toxicity.py — a
+# self-contained subsystem lifted out of this module; see build_metrics.
+
+# ---- Per-position rating (Plays-Like skill, weighted by measured lane) ----
+SUPPORT_GPM_HINT = 380     # median GPM below this reads as a support tendency
+POS_NAMES = {1: "Pos 1 (Safe)", 2: "Pos 2 (Mid)", 3: "Pos 3 (Off)",
+             4: "Pos 4 (Soft Sup)", 5: "Pos 5 (Hard Sup)"}
+LANE_TO_POS = {"Safe": 1, "Mid": 2, "Off": 3}
+POS_TO_LANE = {p: l for l, p in LANE_TO_POS.items()}
+# Lane a support shares with its core, so lane share counts for them too. The
+# tag is ambiguous — a Safe-lane match is a pos 1 AND a pos 5 — so this term is
+# gated on support comfort, which decides which of the two the player was.
+SUPPORT_LANE = {4: "Off", 5: "Safe"}
+SUPPORT_LANE_W = 0.5       # lane evidence is weaker for supports than cores
+
+# ---- position-rating model ------------------------------------------------
+# A position's rating is the player's base skill plus four independent evidence
+# channels, each damped by n/(n+k) on the sample standing behind that channel.
+# The caps below are the most any one channel may move a rating; a thin sample
+# shrinks toward base rather than inventing a spread it can't support.
+POS_SPREAD_CAP = 700       # furthest any position may sit from base skill
+LANE_CHANNEL_CAP = 280     # measured lane share (cores only)
+HERO_CHANNEL_CAP = 300     # hero-pool position affinity (the only 4-vs-5 signal)
+PERF_CHANNEL_CAP = 160     # win rate within a lane vs the player's own overall
+SUPP_CHANNEL_CAP = 220     # support-comfort gradient (positions 4/5)
+
+LANE_SHRINK_K = 40         # lane-tagged matches for the lane channel's half-say
+HERO_SHRINK_K = 60         # games on known heroes, for the hero channel
+PERF_SHRINK_K = 25         # matches in a given lane, for the win-rate channel
+SUPP_SHRINK_K = 40         # matches with GPM/KDA, for the support gradient
+
+LANE_FULL_SHARE = 35       # % of matches in a lane that counts as a full-time role
+HERO_FLAT_SHARE = 0.20     # fallback neutral affinity when the pool is too thin
+HERO_BASELINE_MIN_PLAYERS = 8   # players with usable hero pools to re-baseline
+PERF_FULL_WR_GAP = 12      # win-rate points vs own average for a full swing
 
 
 def rank_tier_to_str(tier):
@@ -36,17 +105,24 @@ def stars_to_tier(stars):
         return None
     if stars >= 35:
         return 80
-    return (stars // 5 + 1) * 10 + (stars % 5 + 1)
+    return (int(stars) // 5 + 1) * 10 + (int(stars) % 5 + 1)
+
+
+def stars_to_mmr(stars):
+    """Continuous star index -> linear MMR (star width from config)."""
+    if stars is None:
+        return None
+    return stars * config.STAR_MMR + config.STAR_MMR / 2
 
 
 def approx_mmr_from_tier(tier):
-    """Midpoint MMR implied by a medal (each star ~154 MMR from Herald 1 = 0)."""
+    """Midpoint MMR implied by a medal."""
     stars = tier_to_stars(tier)
     if stars is None:
         return None
     if tier >= 80:
         return 5600
-    return stars * 154 + 77
+    return round(stars_to_mmr(stars))
 
 
 def days_since(unix_ts):
@@ -61,6 +137,12 @@ def _won(m):
     return is_radiant == bool(m.get("radiant_win"))
 
 
+def is_organized_match(m):
+    """True for the Captains Mode / 10-stack lobbies used as league evidence."""
+    return (m.get("lobby_type") in (1, 2)
+            and (m.get("game_mode") == 2 or m.get("party_size") == 10))
+
+
 def _wl_rate(wl):
     if not wl:
         return None
@@ -71,31 +153,161 @@ def _wl_rate(wl):
     return {"wins": w, "losses": l, "games": total, "winrate": round(w / total * 100, 1)}
 
 
+def _skill_estimate(d, matches):
+    """Combine medal-implied MMR and ranked-lobby median into one estimate.
+
+    Fills skill_mmr / skill_unc / skill_srcs / skill_note. Listed MMR is not
+    used, so the result is comparable against it.
+    """
+    medal_est = d["approx_mmr"]
+
+    ranks_all = [m["average_rank"] for m in matches if m.get("average_rank")]
+    ranks_rk = [m["average_rank"] for m in matches
+                if m.get("average_rank") and m.get("lobby_type") == 7]
+    if len(ranks_rk) >= config.LOBBY_RANKED_MIN:
+        ranks, lobby_kind = ranks_rk, f"ranked n={len(ranks_rk)}"
+    elif ranks_all:
+        ranks, lobby_kind = ranks_all, f"all-queue n={len(ranks_all)}"
+    else:
+        ranks, lobby_kind = [], ""
+
+    lobby_est = sigma_lobby = None
+    if len(ranks) >= 10:
+        med_stars = statistics.median(sorted(tier_to_stars(r) for r in ranks))
+        lobby_est = stars_to_mmr(med_stars)
+        sigma_lobby = clamp(config.SIGMA_LOBBY_BASE / (len(ranks) / 20) ** 0.5,
+                            config.SIGMA_LOBBY_MIN, config.SIGMA_LOBBY_MAX)
+
+    srcs = []
+    if medal_est is not None:
+        srcs.append(f"medal {d['rank_str']} ≈{medal_est}")
+    if lobby_est is not None:
+        srcs.append(f"lobbies ({lobby_kind}) ≈{round(lobby_est)}")
+    d["skill_srcs"] = " · ".join(srcs)
+
+    if medal_est is not None and lobby_est is not None:
+        gap = lobby_est - medal_est
+        if abs(gap) <= config.SOURCE_DISAGREE_MMR:
+            est, sigma = ivw_mean([(medal_est, config.SIGMA_MEDAL),
+                                   (lobby_est, sigma_lobby)])
+            unc = max(sigma, abs(gap) / 2, 120)
+        elif gap > 0:
+            # queues far above the medal: medal is stale/uncalibrated
+            w = (config.STALE_MEDAL_LOBBY_W_EXTREME
+                 if gap > config.STALE_MEDAL_EXTREME else config.STALE_MEDAL_LOBBY_W)
+            est = w * lobby_est + (1 - w) * medal_est
+            unc = clamp(abs(gap) / 2, 200, 600)
+            d["skill_note"] = "medal looks stale — trusting lobbies"
+        else:
+            # medal far above lobbies: likely queuing down / party games
+            w = config.QUEUE_DOWN_MEDAL_W
+            est = w * medal_est + (1 - w) * lobby_est
+            unc = clamp(abs(gap) / 2, 200, 600)
+            d["skill_note"] = "queues below own medal"
+    elif lobby_est is not None:
+        est, unc = lobby_est, sigma_lobby * 1.2
+        d["skill_note"] = "no medal — lobbies only"
+    elif medal_est is not None:
+        est, unc = medal_est, 250
+        d["skill_note"] = "no match sample — medal only"
+    else:
+        d["skill_mmr"] = d["skill_unc"] = None
+        return
+
+    d["skill_mmr"] = round(est)
+    d["skill_unc"] = round(unc)
+
+
 def build_metrics(player, sections, hero_map):
     """Turn raw cached sections into the scouting data dict used by reports."""
     d = {
         "rank_tier": None, "rank_str": "?",
         "approx_mmr": None, "mmr_gap": None, "mmr_check": "",
         "wins": 0, "losses": 0, "winrate": 0, "total_matches": 0,
-        "form30": None, "form90": None,
+        "form30": None, "form90": None, "z30": None, "z90": None,
+        "hot": False, "cold": False, "hot_cold_z": None,
         "last_match_days": None, "avg_kda": 0, "avg_gpm": 0, "avg_xpm": 0,
+        "stats_n": 0,  # matches behind avg_kda/gpm/xpm (20 = recent fallback)
+        # assists per death: separates the sacrificial pos 5 from the pos 4,
+        # both of which sit below the support GPM line
+        "avg_apd": None,
         "recent_heroes": [], "top_heroes": [], "versatility": 0,
         "signature_heroes": [],
+        # hero_id -> lifetime games, for hero->position priors (hero_positions)
+        "hero_games": {},
+        # pool-median affinity per position, filled by pool_analysis
+        "hero_pos_baseline": None,
+        # skill estimate (behavioral, independent of listed MMR)
+        "skill_mmr": None, "skill_unc": None, "skill_srcs": "", "skill_note": "",
+        "momentum": 0, "rust": 0, "adj_skill": None,
+        "value_gap": None, "listed_suspect": False,
+        # listed-MMR climb since signup (current listed - baseline at first sighting)
+        "signup_mmr": None, "mmr_climb": None, "climbing": False, "falling": False,
+        # private profile = hasn't exposed public matchmaking data (OpenDota fh_unavailable)
+        "private_profile": False,
+        # pool-relative (filled by pool_analysis)
+        "farm_z": None, "farm_peers": 0, "kda_z": None, "kda_peers": 0,
+        "worth_cost": None, "worth_base": None, "edge_cost": None,
         # lobby quality (average_rank based)
         "lobby_median_tier": None, "lobby_rank_str": "—", "lobby_sample": 0,
         "punches_above": False, "punch_gap_stars": None,
+        # record in matches >= 2 stars above own medal
+        "up_n": 0, "up_w": 0, "up_wr": None, "up_z": None,
         # queue habits
         "solo_pct": None, "solo_wr": None, "party_wr": None,
-        "solo_n": 0, "party_n": 0,
-        # actual lanes (parsed matches only)
-        "lane_str": "—", "lane_n": 0, "lane_pcts": {},
-        # real league history (leagueid > 0)
+        "solo_n": 0, "party_n": 0, "solo_w": 0,
+        # actual lanes (all matches with lane_role)
+        "lane_str": "—", "lane_n": 0, "lane_pcts": {}, "lane_gpm": {},
+        # per-lane record: {lane: {"n","w","wr"}} — lets a lane the player
+        # actually wins in rate above one they merely show up in
+        "lane_wr": {},
+        # server region played most over the last 3 months
+        "server_main": None, "server_mix": "", "server_n": 0,
+        # record on US East servers over the full sample (LD2L plays on USE)
+        "use_n": 0, "use_w": 0, "use_wr": None,
+        # real league history (lobby fingerprint)
         "league_matches": 0, "league_wins": 0, "league_losses": 0,
         "league_winrate": 0, "league_heroes": [], "has_league_exp": False,
+        # verified OpenDota ticketed matches (leagueid > 0)
+        "esports_status": "unavailable", "esports_incomplete": False,
+        "esports_games": 0, "esports_wins": 0, "esports_losses": 0,
+        "esports_winrate": None, "esports_league_count": 0,
+        "esports_first": None, "esports_latest": None,
+        "esports_6mo_games": 0, "esports_6mo_wins": 0,
+        "esports_6mo_losses": 0, "esports_6mo_winrate": None,
+        "esports_leagues": [], "esports_recent_matches": [],
+        "esports_recent_mode": "none",
         # auction history (filled in by auction.annotate_players)
-        "est_cost": None, "last_cost": None, "last_cost_season": None,
-        "last_draft_mmr": None, "was_captain_last": False,
+        "est_cost": None, "est_base": None, "last_cost": None,
+        "last_cost_season": None, "last_draft_mmr": None,
+        "was_captain_last": False,
+        # chat / toxicity (from OpenDota wordcloud my_word_counts)
+        "chat_total_words": 0, "chat_unique_words": 0, "chat_top_words": [],
+        "toxicity_hits": [], "toxicity_breakdown": {"flame": 0, "curse": 0, "slur": 0},
+        "toxicity_score": None, "toxicity_label": "—", "private_chat": False,
     }
+
+    esports = sections.get("esports")
+    if isinstance(esports, dict):
+        recent_esports = esports.get("six_month") or {}
+        d.update({
+            "esports_status": esports.get("status", "unavailable"),
+            "esports_incomplete": bool(esports.get("incomplete")),
+            "esports_games": esports.get("games", 0),
+            "esports_wins": esports.get("wins", 0),
+            "esports_losses": esports.get("losses", 0),
+            "esports_winrate": esports.get("winrate"),
+            "esports_league_count": esports.get("league_count", 0),
+            "esports_first": esports.get("first"),
+            "esports_latest": esports.get("latest"),
+            "esports_6mo_games": recent_esports.get("games", 0),
+            "esports_6mo_wins": recent_esports.get("wins", 0),
+            "esports_6mo_losses": recent_esports.get("losses", 0),
+            "esports_6mo_winrate": recent_esports.get("winrate"),
+            "esports_leagues": esports.get("leagues") or [],
+            "esports_recent_matches": esports.get("recent_matches") or [],
+            "esports_recent_mode": esports.get("recent_mode", "none"),
+        })
 
     # ---- profile / rank ----
     profile = sections.get("profile") or {}
@@ -119,19 +331,17 @@ def build_metrics(player, sections, hero_map):
         d["winrate"] = wl["winrate"]
     d["form30"] = _wl_rate(sections.get("wl30"))
     d["form90"] = _wl_rate(sections.get("wl90"))
+    for form_key, z_key in (("form30", "z30"), ("form90", "z90")):
+        f = d[form_key]
+        if f and f["games"] >= 10:
+            d[z_key] = round(binom_z(f["wins"], f["games"]), 2)
+    # NB: hot/cold flags are NOT set here. The bar depends on how many players
+    # get tested, which isn't known until the pool is loaded — pool_analysis.
 
-    # ---- recent matches: activity + KDA/GPM/XPM ----
+    # ---- recent matches: activity + fallback KDA/GPM ----
     recent = sections.get("recent") or []
     if isinstance(recent, list) and recent:
         d["last_match_days"] = days_since(recent[0].get("start_time"))
-        kills = sum(m.get("kills", 0) for m in recent)
-        deaths = sum(m.get("deaths", 0) for m in recent)
-        assists = sum(m.get("assists", 0) for m in recent)
-        gpms = [m["gold_per_min"] for m in recent if m.get("gold_per_min")]
-        xpms = [m["xp_per_min"] for m in recent if m.get("xp_per_min")]
-        d["avg_kda"] = round((kills + assists) / max(deaths, 1), 2)
-        d["avg_gpm"] = round(sum(gpms) / len(gpms)) if gpms else 0
-        d["avg_xpm"] = round(sum(xpms) / len(xpms)) if xpms else 0
         d["recent_heroes"] = [hero_map.name(m["hero_id"]) for m in recent[:10] if m.get("hero_id")]
 
     # ---- lifetime hero stats ----
@@ -146,6 +356,13 @@ def build_metrics(player, sections, hero_map):
             wr = round(wins / games * 100)
             d["top_heroes"].append(f"{hero_map.name(int(h['hero_id']))} ({games}g {wr}%)")
         for h in heroes:
+            games = int(h.get("games", 0))
+            if games > 0:
+                try:
+                    d["hero_games"][int(h["hero_id"])] = games
+                except (KeyError, ValueError, TypeError):
+                    pass
+        for h in heroes:
             games, wins = int(h.get("games", 0)), int(h.get("win", 0))
             if games >= config.SIGNATURE_MIN_GAMES:
                 wr = round(wins / games * 100, 1)
@@ -156,9 +373,14 @@ def build_metrics(player, sections, hero_map):
                     })
         d["signature_heroes"].sort(key=lambda s: -s["winrate"])
 
-    # ---- match sample: lobby rank, solo/party, lanes, league games ----
+    # ---- match sample: lobby rank, performance, solo/party, lanes, league ----
     matches = sections.get("matches") or []
-    if isinstance(matches, list) and matches:
+    if not isinstance(matches, list):
+        matches = []
+    if matches:
+        if d["last_match_days"] is None:
+            d["last_match_days"] = days_since(matches[0].get("start_time"))
+
         ranks = [m["average_rank"] for m in matches if m.get("average_rank")]
         if ranks:
             d["lobby_sample"] = len(ranks)
@@ -172,6 +394,46 @@ def build_metrics(player, sections, hero_map):
                 d["punch_gap_stars"] = gap
                 d["punches_above"] = gap >= config.PUNCH_STAR_GAP
 
+        # performance over the full sample (projection >= _v2); recent fallback
+        with_stats = [m for m in matches if m.get("gold_per_min") is not None
+                      and m.get("deaths") is not None]
+        if len(with_stats) >= 30:
+            k = sum(m.get("kills", 0) for m in with_stats)
+            dd = sum(m.get("deaths", 0) for m in with_stats)
+            a = sum(m.get("assists", 0) for m in with_stats)
+            d["avg_kda"] = round((k + a) / max(dd, 1), 2)
+            d["avg_apd"] = round(a / max(dd, 1), 2)
+            d["avg_gpm"] = round(statistics.median(m["gold_per_min"] for m in with_stats))
+            xpms = [m["xp_per_min"] for m in with_stats if m.get("xp_per_min")]
+            d["avg_xpm"] = round(statistics.median(xpms)) if xpms else 0
+            d["stats_n"] = len(with_stats)
+            for lr, lname in LANE_NAMES.items():
+                lg = [m["gold_per_min"] for m in with_stats if m.get("lane_role") == lr]
+                if len(lg) >= 8:
+                    d["lane_gpm"][lname] = round(statistics.median(lg))
+
+        # per-lane record over the whole sample (not just the stats subset)
+        for lr, lname in LANE_NAMES.items():
+            in_lane = [m for m in matches if m.get("lane_role") == lr]
+            if len(in_lane) >= 8:
+                w = sum(1 for m in in_lane if _won(m))
+                d["lane_wr"][lname] = {
+                    "n": len(in_lane), "w": w,
+                    "wr": round(w / len(in_lane) * 100, 1),
+                }
+
+        # record when queuing >= UP_LOBBY_STARS above own medal
+        own = tier_to_stars(d["rank_tier"])
+        if own is not None:
+            up = [m for m in matches if m.get("average_rank")
+                  and tier_to_stars(m["average_rank"]) >= own + config.UP_LOBBY_STARS]
+            d["up_n"] = len(up)
+            if up:
+                d["up_w"] = sum(1 for m in up if _won(m))
+                d["up_wr"] = round(d["up_w"] / len(up) * 100, 1)
+                if len(up) >= 10:
+                    d["up_z"] = round(binom_z(d["up_w"], len(up)), 2)
+
         solo_w = solo_l = party_w = party_l = 0
         for m in matches:
             ps = m.get("party_size")
@@ -184,6 +446,7 @@ def build_metrics(player, sections, hero_map):
                 if _won(m): party_w += 1
                 else: party_l += 1
         d["solo_n"], d["party_n"] = solo_w + solo_l, party_w + party_l
+        d["solo_w"] = solo_w
         known = d["solo_n"] + d["party_n"]
         if known:
             d["solo_pct"] = round(d["solo_n"] / known * 100)
@@ -203,13 +466,38 @@ def build_metrics(player, sections, hero_map):
                               for k, v in sorted(lanes.items())}
             d["lane_str"] = " · ".join(f"{n} {p}%" for n, p in d["lane_pcts"].items())
 
+        # server region played most over the last 3 months
+        servers = {}
+        for m in matches:
+            days = days_since(m.get("start_time"))
+            if days is None or days > 90:
+                continue
+            reg = cluster_region(m.get("cluster"))
+            if reg:
+                servers[reg] = servers.get(reg, 0) + 1
+        d["server_n"] = sum(servers.values())
+        if d["server_n"]:
+            ranked = sorted(servers.items(), key=lambda kv: -kv[1])
+            d["server_main"] = ranked[0][0]
+            d["server_mix"] = " · ".join(f"{r} {round(n / d['server_n'] * 100)}%"
+                                         for r, n in ranked[:3])
+
+        # W/L on US East servers — the region LD2L games are played on. Full
+        # sample (not the 3mo server-mix window) for a usable n.
+        for m in matches:
+            if cluster_region(m.get("cluster")) != "USE":
+                continue
+            d["use_n"] += 1
+            if _won(m):
+                d["use_w"] += 1
+        if d["use_n"]:
+            d["use_wr"] = round(d["use_w"] / d["use_n"] * 100, 1)
+
         # League/inhouse games: practice or tournament lobbies played as Captains
         # Mode or full 10-stacks. (OpenDota's player-matches projection does NOT
         # populate leagueid, so lobby fingerprint is the reliable signal.)
         for m in matches:
-            if m.get("lobby_type") not in (1, 2):
-                continue
-            if m.get("game_mode") != 2 and m.get("party_size") != 10:
+            if not is_organized_match(m):
                 continue
             d["league_matches"] += 1
             if _won(m):
@@ -224,80 +512,547 @@ def build_metrics(player, sections, hero_map):
             d["has_league_exp"] = True
             d["league_winrate"] = round(d["league_wins"] / d["league_matches"] * 100, 1)
 
+    # fallback performance stats from the 20-game recent window
+    if not d["stats_n"] and isinstance(recent, list) and recent:
+        kills = sum(m.get("kills", 0) for m in recent)
+        deaths = sum(m.get("deaths", 0) for m in recent)
+        assists = sum(m.get("assists", 0) for m in recent)
+        gpms = [m["gold_per_min"] for m in recent if m.get("gold_per_min")]
+        xpms = [m["xp_per_min"] for m in recent if m.get("xp_per_min")]
+        d["avg_kda"] = round((kills + assists) / max(deaths, 1), 2)
+        d["avg_gpm"] = round(sum(gpms) / len(gpms)) if gpms else 0
+        d["avg_xpm"] = round(sum(xpms) / len(xpms)) if xpms else 0
+        d["stats_n"] = len(recent)
+
+    # ---- skill estimate + momentum/rust adjustments ----
+    _skill_estimate(d, matches)
+    if d["z30"] is not None and abs(d["z30"]) >= config.MOMENTUM_MIN_Z:
+        d["momentum"] = round(clamp(config.MOMENTUM_MMR_PER_Z * d["z30"],
+                                    -config.MOMENTUM_CAP, config.MOMENTUM_CAP))
+    if d["last_match_days"] is not None and d["last_match_days"] > 30:
+        d["rust"] = round(min(config.RUST_PER_DAY * (d["last_match_days"] - 30),
+                              config.RUST_CAP))
+    if d["skill_mmr"] is not None:
+        d["adj_skill"] = d["skill_mmr"] + d["momentum"] - d["rust"]
+        if listed:
+            d["value_gap"] = d["adj_skill"] - listed
+            d["listed_suspect"] = (listed <= config.PLACEHOLDER_LISTED
+                                   and d["value_gap"] >= config.PLACEHOLDER_MIN_GAP)
+
+    # ---- private profile: no exposed match history ----
+    inner = profile.get("profile") or {}
+    d["private_profile"] = (bool(inner.get("fh_unavailable"))
+                            or (d["total_matches"] == 0 and not matches and not recent))
+
+    # ---- listed-MMR climb since signup (website number movement) ----
+    d["signup_mmr"] = player.get("signup_mmr")
+    if d["signup_mmr"] is not None and listed:
+        d["mmr_climb"] = listed - d["signup_mmr"]
+        d["climbing"] = d["mmr_climb"] >= config.CLIMB_FLAG_MMR
+        d["falling"] = d["mmr_climb"] <= -config.CLIMB_FLAG_MMR
+
+    # ---- chat toxicity (wordcloud my_word_counts) — see scout/toxicity.py ----
+    d.update(toxicity.score(sections.get("wordcloud")))
+
     return d
 
 
-def value_tier(mmr, d):
-    """S-F tier from listed MMR, with performance/activity markers."""
-    bonus = ""
-    if d["winrate"] > 53 and d["total_matches"] > 200:
-        bonus = " ↑WR"
-    if d["last_match_days"] is not None and d["last_match_days"] > config.INACTIVE_DAYS:
-        bonus += " ⚠INACTIVE"
-    if mmr >= 4300: return "S - Elite" + bonus
-    if mmr >= 4000: return "A - Premium" + bonus
-    if mmr >= 3500: return "B - Solid" + bonus
-    if mmr >= 3000: return "C - Average" + bonus
-    if mmr >= 2500: return "D - Budget" + bonus
-    if mmr >= 2000: return "E - Bargain" + bonus
-    return "F - Minimum" + bonus
+def measured_roles(d):
+    """Positions implied by the lanes actually played: Safe→1, Mid→2, Off→3.
+
+    Declared signup prefs are ignored (the site's role data is unreliable).
+    Support roles (4/5) can't be inferred from lane alone — the dashboard lets
+    you set those by hand; here we only key off the measured lanes.
+    """
+    lanes = d.get("lane_pcts") or {}
+    roles = []
+    if lanes.get("Safe", 0) >= 15:
+        roles.append(1)
+    if lanes.get("Mid", 0) >= 15:
+        roles.append(2)
+    if lanes.get("Off", 0) >= 15:
+        roles.append(3)
+    return roles
+
+
+def _measured_core(d):
+    """True when the player actually plays a core lane (safe/mid/off)."""
+    return bool(measured_roles(d))
+
+
+def _peer_values(target_pd, pool, metric):
+    """Metric values of pool members near target's listed MMR (widening once)."""
+    mmr = target_pd["player"]["mmr"]
+    vals = [(abs(pd["player"]["mmr"] - mmr), pd["data"][metric])
+            for pd in pool if pd is not target_pd and pd["data"][metric]]
+    near = [v for dist, v in vals if dist <= config.PEER_MMR_WINDOW]
+    if len(near) >= config.PEER_MIN:
+        return near
+    return [v for _, v in vals] if len(vals) >= config.PEER_MIN else []
+
+
+def flag_hot_cold(all_data):
+    """Owner of the family-wise hot/cold streak flag (the pool-relative half of
+    the value signal that build_metrics deliberately leaves unset).
+
+    Hot/cold is a multiple-comparisons problem. HOT_COLD_Z is the bar for
+    testing ONE player, but every player with a 30d record gets tested, so at
+    1.65 a ~100-player board shows ~10 streaks that are pure luck. Raise the bar
+    with the pool size so HOT_COLD_FAMILY_ALPHA is the odds of any false flag on
+    the whole board. Never drops below the single-test floor. Returns the bar
+    that was applied.
+    """
+    tested = [pd for pd in all_data if pd["data"]["z30"] is not None]
+    bar = max(family_z(len(tested), config.HOT_COLD_FAMILY_ALPHA) or 0,
+              config.HOT_COLD_Z)
+    for pd in tested:
+        d = pd["data"]
+        d["hot_cold_z"] = round(bar, 2)
+        d["hot"] = d["z30"] >= bar
+        d["cold"] = d["z30"] <= -bar
+    return bar
+
+
+def _set_hero_pos_baseline(all_data):
+    """Neutral hero-pool affinity per position, measured from this pool.
+
+    Position affinity can't be compared against a flat 1-in-5: the hero table
+    is honestly lopsided, because pos 4 is the most shared role in Dota (only
+    ~6 heroes are played there and nowhere else, against ~17 for pos 5). Scored
+    against a flat baseline every player looks like a hard support and nobody
+    looks like a soft support. Taking the pool's own median as neutral cancels
+    that, so a rating says "supports more than his peers do" rather than
+    "matches an arbitrary prior".
+    """
+    per_pos = {p: [] for p in range(1, 6)}
+    for pd in all_data:
+        shares, counted = hero_positions.affinity(pd["data"].get("hero_games"))
+        if counted >= HERO_SHRINK_K:
+            for p in range(1, 6):
+                per_pos[p].append(shares[p])
+
+    sampled = [v for vals in per_pos.values() for v in vals]
+    if len(sampled) < 5 * HERO_BASELINE_MIN_PLAYERS:
+        return  # too thin a pool to re-baseline; the flat prior stays
+    baseline = {p: statistics.median(vals) if vals else HERO_FLAT_SHARE
+                for p, vals in per_pos.items()}
+    for pd in all_data:
+        pd["data"]["hero_pos_baseline"] = baseline
+
+
+def pool_analysis(all_data, price_estimator=None):
+    """Pool-relative pass: hot/cold flags, peer z-scores and auction worth/edge.
+
+    Call after every player is fetched and auction.annotate_players has run.
+    """
+    flag_hot_cold(all_data)
+    _set_hero_pos_baseline(all_data)
+
+    cores = [pd for pd in all_data if _measured_core(pd["data"])
+             and pd["data"]["stats_n"] >= 30]
+    scored = [pd for pd in all_data if pd["data"]["stats_n"] >= 30]
+
+    for pd in all_data:
+        p, d = pd["player"], pd["data"]
+
+        if d["stats_n"] >= 30 and _measured_core(d):
+            peers = _peer_values(pd, cores, "avg_gpm")
+            d["farm_peers"] = len(peers)
+            z = robust_z(d["avg_gpm"], peers)
+            d["farm_z"] = round(z, 2) if z is not None else None
+
+        if d["stats_n"] >= 30:
+            peers = _peer_values(pd, scored, "avg_kda")
+            d["kda_peers"] = len(peers)
+            z = robust_z(d["avg_kda"], peers)
+            d["kda_z"] = round(z, 2) if z is not None else None
+
+        if price_estimator and d["adj_skill"] is not None:
+            d["worth_base"] = price_estimator(d["adj_skill"], with_premium=False)
+            d["worth_cost"] = price_estimator(d["adj_skill"], measured_roles(d))
+            if d["worth_cost"] is not None and d["est_cost"] is not None:
+                d["edge_cost"] = d["worth_cost"] - d["est_cost"]
+
+
+def value_tier(d):
+    """Letter grade of value = skill estimate vs listed MMR.
+
+    S/A/B = plays above their price, C = fairly listed, D/E/F = listed above
+    how they actually play. '?' marks gaps smaller than the estimate's
+    uncertainty; unrated placeholders and no-data players aren't graded.
+    """
+    if d["listed_suspect"]:
+        return "★ Unrated"
+    g = d["value_gap"]
+    if g is None:
+        return "—"
+    letter, label = config.VALUE_TIER_FLOOR
+    for thresh, lt, lb in config.VALUE_TIER_BANDS:
+        if g >= thresh:
+            letter, label = lt, lb
+            break
+    tier = f"{letter} - {label}"
+    if letter != "C" and d["skill_unc"] and abs(g) < d["skill_unc"]:
+        tier += " ?"
+    return tier
 
 
 def is_strong_value_signal(d):
     """A single signal strong enough to justify a Value Picks entry on its own."""
-    f30 = d["form30"]
-    return (d["punches_above"]
-            or (d["mmr_gap"] is not None and d["mmr_gap"] >= config.MMR_CHECK_GAP)
-            or (f30 and f30["games"] >= 20 and f30["winrate"] >= 58)
-            or (d["solo_wr"] is not None and d["solo_wr"] >= 55 and d["solo_n"] >= 30))
+    return ((d["value_gap"] is not None and d["value_gap"] >= config.VALUE_GAP_MMR
+             and not d["listed_suspect"])
+            or d["hot"]
+            or d["punches_above"]
+            or (d["up_n"] >= config.UP_LOBBY_MIN_GAMES and d["up_wr"] is not None
+                and d["up_wr"] >= 52)
+            or (d["farm_z"] is not None and d["farm_z"] >= config.PEER_Z_FLAG))
 
 
 def value_pick_signals(p, d):
-    """Reasons a player may outperform their MMR, and risk flags."""
+    """Reasons a player may outperform their MMR, and risk flags (z-grounded)."""
     reasons, risks = [], []
     mmr = p["mmr"]
 
-    # NB: thresholds are calibrated to LD2L signups, where a 5000-game veteran
-    # with league experience is the norm — only genuinely unusual traits count.
-    if d["winrate"] > 52 and d["total_matches"] > 200 and mmr < 3000:
-        reasons.append(f"Win% {d['winrate']}% over {d['total_matches']} games at only {mmr} MMR")
-    if d["total_matches"] > 8000:
-        reasons.append(f"{d['total_matches']} total games - extremely experienced")
-    if d["avg_kda"] > 4.5:
-        reasons.append(f"Recent KDA {d['avg_kda']} - performing well")
-    f30 = d["form30"]
-    if f30 and f30["games"] >= 20 and f30["winrate"] >= 58:
-        reasons.append(f"Hot streak: {f30['winrate']}% over last 30d ({f30['games']}g)")
-    if d["mmr_gap"] is not None and d["mmr_gap"] >= config.MMR_CHECK_GAP:
-        reasons.append(f"Medal {d['rank_str']} implies ~{d['approx_mmr']} MMR vs {mmr} listed")
-    if d["punches_above"]:
+    # NB: calibrated to LD2L signups, where a 5000-game veteran with league
+    # experience is the norm — only statistically unusual traits count.
+    if d["value_gap"] is not None and d["value_gap"] >= config.VALUE_GAP_MMR:
+        if d["listed_suspect"]:
+            reasons.append(f"Unrated signup: plays like ~{d['adj_skill']} "
+                           f"({d['skill_srcs']}) but listed {mmr}")
+        else:
+            reasons.append(f"Plays like ~{d['adj_skill']}±{d['skill_unc']} "
+                           f"vs listed {mmr} (+{d['value_gap']})")
+    if d["hot"]:
+        f30 = d["form30"]
+        reasons.append(f"Hot: {f30['wins']}-{f30['losses']} last 30d "
+                       f"(z=+{d['z30']} vs {d['hot_cold_z']} pool bar)")
+    if (d["up_n"] >= config.UP_LOBBY_MIN_GAMES and d["up_wr"] is not None
+            and wilson_lower(d["up_w"], d["up_n"]) >= 0.5):
+        reasons.append(f"Holds up a bracket: {d['up_w']}-{d['up_n'] - d['up_w']} "
+                       f"({d['up_wr']}%) in lobbies {config.UP_LOBBY_STARS}+ stars above medal")
+    elif d["punches_above"]:
         reasons.append(f"Queues into {d['lobby_rank_str']} lobbies (median) vs own {d['rank_str']}")
-    if d["solo_wr"] is not None and d["solo_wr"] >= 55 and d["solo_n"] >= 30:
+    if d["farm_z"] is not None and d["farm_z"] >= config.PEER_Z_FLAG:
+        reasons.append(f"Farms +{d['farm_z']}σ vs {d['farm_peers']} similar-MMR cores "
+                       f"({d['avg_gpm']} median GPM)")
+    if d["kda_z"] is not None and d["kda_z"] >= config.PEER_Z_FLAG:
+        reasons.append(f"KDA {d['avg_kda']} is +{d['kda_z']}σ vs {d['kda_peers']} "
+                       f"MMR peers (over {d['stats_n']}g)")
+    if d["solo_n"] >= 30 and d["solo_wr"] is not None \
+            and wilson_lower(d["solo_w"], d["solo_n"]) >= 0.52:
         reasons.append(f"Solo queue {d['solo_wr']}% WR ({d['solo_n']}g) - self-sufficient")
-    # (versatility deliberately not a reason: lifetime unique-heroes is ~max
-    # for every veteran account, so it can't differentiate LD2L signups)
     if len(d["signature_heroes"]) >= 5:
         names = [s["hero"] for s in d["signature_heroes"][:3]]
         reasons.append(f"{len(d['signature_heroes'])} signature heroes inc. {', '.join(names)}")
-    if d["league_matches"] >= 30:
+    if d["league_matches"] >= 30 and d["league_winrate"] >= 50:
         reasons.append(f"{d['league_matches']} league games in last 6mo ({d['league_winrate']}% WR)")
-    if mmr <= 1000 and d["total_matches"] > 500:
-        reasons.append(f"Listed at minimum MMR but {d['total_matches']} games played")
+    if d["total_matches"] > 8000:
+        reasons.append(f"{d['total_matches']} total games - extremely experienced")
     if d["last_draft_mmr"] and mmr and d["last_draft_mmr"] - mmr >= 300:
         reasons.append(f"Listed {mmr} now vs {d['last_draft_mmr']} at their "
                        f"{d['last_cost_season']} draft (-{d['last_draft_mmr'] - mmr})")
 
+    if d["value_gap"] is not None and d["value_gap"] <= -config.VALUE_GAP_MMR:
+        risks.append(f"Listed {mmr} but plays like ~{d['adj_skill']} "
+                     f"({d['value_gap']})")
+    if d["cold"]:
+        f30 = d["form30"]
+        risks.append(f"Cold: {f30['wins']}-{f30['losses']} last 30d "
+                     f"(z={d['z30']} vs {d['hot_cold_z']} pool bar)")
     if d["last_match_days"] is not None and d["last_match_days"] > 60:
         risks.append(f"Inactive {d['last_match_days']}d")
-    if d["winrate"] < 48 and d["total_matches"] > 200:
-        risks.append(f"Sub-48% WR over {d['total_matches']} games")
-    if f30 and f30["games"] >= 20 and f30["winrate"] <= 42:
-        risks.append(f"Cold streak: {f30['winrate']}% over last 30d")
-    if d["mmr_gap"] is not None and d["mmr_gap"] <= -config.MMR_CHECK_GAP:
-        risks.append(f"Listed {mmr} but medal {d['rank_str']} implies ~{d['approx_mmr']}")
+    if d["farm_z"] is not None and d["farm_z"] <= -config.PEER_Z_FLAG:
+        risks.append(f"Farms {d['farm_z']}σ below similar-MMR cores")
     if d["total_matches"] < 100:
         risks.append("Very few games on record")
+    if d["lobby_sample"] and d["lobby_sample"] < 20:
+        risks.append(f"Thin match sample ({d['lobby_sample']} rated games in 6mo)")
     if not p.get("mmr_valid") and not p.get("mmr_screenshot"):
         risks.append("MMR not validated")
 
     return reasons, risks
+
+
+def select_value_picks(all_data):
+    """(picks, unrated): value-board entries and placeholder-MMR signups.
+
+    picks are sorted by auction edge (worth$ - expected$), falling back to
+    the MMR value gap when no auction history covers the pool.
+    """
+    picks, unrated = [], []
+    for pd in all_data:
+        d = pd["data"]
+        if d["listed_suspect"]:
+            unrated.append(pd)
+            continue
+        reasons, risks = value_pick_signals(pd["player"], d)
+        if len(reasons) >= 2 or (reasons and is_strong_value_signal(d)):
+            picks.append((pd, reasons, risks))
+
+    def edge_key(item):
+        d = item[0]["data"]
+        if d["edge_cost"] is not None:
+            return -d["edge_cost"]
+        if d["value_gap"] is not None:
+            return -d["value_gap"] / 10
+        return 0.0
+
+    picks.sort(key=edge_key)
+    unrated.sort(key=lambda pd: -(pd["data"]["value_gap"] or 0))
+    return picks, unrated
+
+
+def _mmr_to_rank_str(mmr):
+    """Inverse of stars_to_mmr: MMR -> nearest medal string (for display)."""
+    if mmr is None:
+        return "—"
+    stars = (mmr - config.STAR_MMR / 2) / config.STAR_MMR
+    stars = max(0, min(36, stars))
+    return rank_tier_to_str(stars_to_tier(round(stars)))
+
+
+def _shrink(n, k):
+    """n/(n+k): how much of a channel's swing a sample of size n has earned."""
+    if not n or n <= 0:
+        return 0.0
+    return n / (n + k)
+
+
+def _support_comfort(d):
+    """0..1 on how support-like the farm profile is, or None without stats.
+
+    Replaces the old boolean GPM threshold: a 379 GPM player and a 180 GPM
+    player are not equally likely to be supports, and the old test called them
+    both one.
+    """
+    gpm = d.get("avg_gpm") or 0
+    if not gpm:
+        return None
+    lo, hi = 200, SUPPORT_GPM_HINT + 60
+    return clamp((hi - gpm) / (hi - lo), 0.0, 1.0)
+
+
+def _hard_support_tilt(d):
+    """-1 (reads pos 4) .. +1 (reads pos 5), or None without stats.
+
+    Hard supports buy the wards, take the bad trades and farm least; soft
+    supports keep more farm and die less for it. Assists-per-death rather than
+    KDA, because a pos 5's deaths are the point rather than a mistake.
+    """
+    apd = d.get("avg_apd")
+    gpm = d.get("avg_gpm") or 0
+    if apd is None or not gpm:
+        return None
+    farm_part = clamp((300 - gpm) / 120.0, -1.0, 1.0)
+    sac_part = clamp((apd - 2.2) / 1.2, -1.0, 1.0)
+    return clamp((farm_part + sac_part) / 2, -1.0, 1.0)
+
+
+def position_ratings(d, hero_map=None):
+    """Estimated skill at each of the five positions, on the tool's Plays-Like
+    scale (medal + MMR).
+
+    Four evidence channels stack onto the base skill estimate:
+      lane   - measured share of matches in that lane, on a saturating curve
+      hero   - where the played hero pool sits positionally; the only signal
+               that separates pos 4 from pos 5, or a pos 1 from the pos 5
+               sharing their safelane
+      perf   - win rate in that lane against the player's own overall
+      supp   - support-comfort gradient from farm and assists-per-death
+
+    Each is damped by the sample behind it and the total is capped at
+    POS_SPREAD_CAP off base, so confident spreads stay wide and thin ones
+    collapse toward the base estimate.
+
+    Returns {"primary": pos|None, "ratings": {pos: {...}}, "note":} or {} when
+    there's no skill estimate to build on.
+    """
+    base = d.get("adj_skill") or d.get("skill_mmr")
+    if base is None:
+        return {}
+
+    lanes = d.get("lane_pcts") or {}
+    lane_wr = d.get("lane_wr") or {}
+    overall_wr = d.get("winrate") or 0
+    hero_share, hero_n = hero_positions.affinity(d.get("hero_games"))
+    baseline = d.get("hero_pos_baseline") or {}
+    comfort = _support_comfort(d)
+    tilt = _hard_support_tilt(d)
+
+    lane_shrink = _shrink(d.get("lane_n") or 0, LANE_SHRINK_K)
+    hero_shrink = _shrink(hero_n, HERO_SHRINK_K)
+    supp_shrink = _shrink(d.get("stats_n") or 0, SUPP_SHRINK_K)
+
+    ratings = {}
+    for pos in range(1, 6):
+        lane = POS_TO_LANE.get(pos)
+        share = lanes.get(lane, 0) if lane else 0
+        adj = 0.0
+        why = []
+
+        # --- lane familiarity (cores): saturating, so 12% and 24% differ
+        if lane and lane_shrink:
+            fam = min(1.0, (share / LANE_FULL_SHARE) ** 0.7) if share > 0 else 0.0
+            a = LANE_CHANNEL_CAP * (2 * fam - 1) * lane_shrink
+            adj += a
+            why.append((f"{lane} lane {share}%", a))
+
+        # --- hero-pool affinity (all five positions), against the pool's own
+        # neutral point rather than a flat 1-in-5 (see _set_hero_pos_baseline)
+        if hero_n:
+            neutral = baseline.get(pos) or HERO_FLAT_SHARE
+            dev = hero_share[pos] - neutral
+            a = (HERO_CHANNEL_CAP
+                 * clamp(dev / neutral, -1.0, 1.5) * hero_shrink)
+            adj += a
+            picks = hero_positions.top_heroes_for(d.get("hero_games"), pos,
+                                                  hero_map)
+            label = f"hero pool {round(hero_share[pos] * 100)}%"
+            if picks:
+                label += " — " + ", ".join(picks)
+            why.append((label, a))
+
+        # --- win rate in this lane vs the player's own average
+        rec = lane_wr.get(lane) if lane else None
+        if rec and overall_wr:
+            delta = rec["wr"] - overall_wr
+            a = (PERF_CHANNEL_CAP * clamp(delta / PERF_FULL_WR_GAP, -1.0, 1.0)
+                 * _shrink(rec["n"], PERF_SHRINK_K))
+            adj += a
+            why.append((f"{rec['wr']}% in {lane} over {rec['n']} "
+                        f"(vs {overall_wr}% overall)", a))
+
+        # --- support comfort, then which support
+        if pos in (4, 5):
+            # lane share of the lane this support stands in, gated on comfort
+            # so a farming safelaner earns no pos 5 credit from it
+            sup_lane = SUPPORT_LANE[pos]
+            sup_share = lanes.get(sup_lane, 0)
+            if lane_shrink and comfort is not None:
+                fam = (min(1.0, (sup_share / LANE_FULL_SHARE) ** 0.7)
+                       if sup_share > 0 else 0.0)
+                a = (LANE_CHANNEL_CAP * SUPPORT_LANE_W * (2 * fam - 1)
+                     * lane_shrink * comfort)
+                adj += a
+                if abs(a) >= 15:
+                    why.append((f"{sup_lane} lane {sup_share}%", a))
+            if comfort is not None:
+                a = SUPP_CHANNEL_CAP * 0.7 * (2 * comfort - 1) * supp_shrink
+                adj += a
+                why.append((f"{d.get('avg_gpm')} GPM", a))
+            if tilt is not None:
+                sign = 1 if pos == 5 else -1
+                a = SUPP_CHANNEL_CAP * 0.3 * sign * tilt * supp_shrink
+                adj += a
+                if abs(a) >= 15:
+                    why.append((f"{d.get('avg_apd')} assists per death", a))
+
+        adj = clamp(adj, -POS_SPREAD_CAP, POS_SPREAD_CAP)
+        mmr = max(0, round(base + adj))
+
+        # evidence for THIS position: a strong hero pool can now carry a
+        # support the way lane share carries a core
+        lane_ev = min(1.0, share / 30.0) * lane_shrink if lane else 0.0
+        neutral = baseline.get(pos) or HERO_FLAT_SHARE
+        hero_ev = min(1.0, hero_share[pos] / (neutral * 1.75)) * hero_shrink
+        ev = max(lane_ev, hero_ev)
+        conf = "measured" if ev >= 0.55 else "part-time" if ev >= 0.25 else "est"
+
+        spread = clamp(d.get("skill_unc") or 200, 80, 600)
+        why.sort(key=lambda w: -abs(w[1]))
+        ratings[pos] = {
+            "mmr": mmr,
+            "rank": _mmr_to_rank_str(mmr),
+            "conf": conf,
+            "note": " · ".join(t for t, _ in why[:2]) or "no positional signal",
+            "unc": round(spread * (1.6 - 0.8 * ev)),
+            "delta": round(adj),
+            "why": [{"reason": t, "mmr": round(v)} for t, v in why],
+        }
+
+    # primary role: best-rated position that has real evidence behind it
+    evidenced = [p for p, r in ratings.items() if r["conf"] != "est"]
+    primary = max(evidenced, key=lambda p: ratings[p]["mmr"]) if evidenced else None
+
+    return {"primary": primary, "ratings": ratings,
+            "note": "Pos 4/5 are separated by hero pool and farm profile — "
+                    "OpenDota's lane data alone cannot tell them apart."}
+
+
+def _exp_phrase(total):
+    if not total:
+        return "has little public match history"
+    if total >= 10000:
+        return f"is a hardened veteran of {total:,}+ games"
+    if total >= 5000:
+        return f"is a seasoned ~{total:,}-game player"
+    if total >= 2000:
+        return f"is an experienced ~{total:,}-game player"
+    if total >= 500:
+        return f"is a developing player (~{total:,} games)"
+    return f"is relatively new (~{total:,} games on record)"
+
+
+def career_narrative(p, d):
+    """Template-based, caster-ready scouting summary (no LLM).
+
+    Assembled entirely from computed fields. Note: OpenDota exposes no
+    account-creation date, so tenure is approximated from total game volume.
+    """
+    name = p.get("name", "This player")
+    parts = []
+
+    pr = position_ratings(d)
+    primary = pr.get("primary")
+    role_txt = ""
+    if primary:
+        role_txt = f", mainly a {POS_NAMES[primary].split(' (')[0].lower()} player"
+    medal = d["rank_str"] if d["rank_str"] != "?" else "an uncalibrated"
+    parts.append(f"{name} {_exp_phrase(d['total_matches'])}{role_txt}. "
+                 f"Ranked {medal} on OpenDota.")
+
+    if d["adj_skill"] is not None:
+        vt = value_tier(d)
+        s = f"Plays like about {d['adj_skill']} MMR"
+        if d["skill_unc"]:
+            s += f" (±{d['skill_unc']})"
+        if vt != "—":
+            s += f" — value tier {vt}"
+        parts.append(s + ".")
+    if d["punches_above"]:
+        parts.append(f"Queues into {d['lobby_rank_str']} lobbies, above their own "
+                     f"{d['rank_str']} medal.")
+
+    lmd = d["last_match_days"]
+    if lmd is not None:
+        if lmd <= 7:
+            parts.append("Currently active.")
+        elif lmd <= 30:
+            parts.append(f"Fairly active (last game {lmd} days ago).")
+        else:
+            parts.append(f"Has been quiet — last game {lmd} days ago.")
+
+    if d["esports_status"] == "unavailable":
+        parts.append("Verified OpenDota ticketed-match history is unavailable.")
+    elif d["esports_games"]:
+        s = (
+            f"OpenDota records {d['esports_games']} ticketed matches across "
+            f"{d['esports_league_count']} leagues at {d['esports_winrate']}% WR."
+        )
+        if d["esports_6mo_games"]:
+            s += (
+                f" In the last 6 months: {d['esports_6mo_wins']}-"
+                f"{d['esports_6mo_losses']} ({d['esports_6mo_winrate']}%)."
+            )
+        parts.append(s)
+    else:
+        parts.append("No OpenDota ticketed matches found.")
+
+    if d["use_n"] >= 10:
+        parts.append(f"On US East (the LD2L server) they're {d['use_w']}-"
+                     f"{d['use_n'] - d['use_w']} ({d['use_wr']}%) over the sample.")
+
+    if d.get("last_cost") and d.get("last_cost_season"):
+        parts.append(f"Went for ${d['last_cost']} at their {d['last_cost_season']} draft.")
+
+    return " ".join(parts)
