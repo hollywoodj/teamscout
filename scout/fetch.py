@@ -9,9 +9,11 @@ from . import config
 # 20-game recentMatches window — same single API call.
 MATCH_PROJECTION = [
     "average_rank", "party_size", "lane", "lane_role", "is_roaming",
-    "lane_efficiency_pct", "version", "hero_id",
+    "lane_efficiency_pct", "version", "patch", "hero_id",
     "start_time", "player_slot", "radiant_win", "lobby_type", "game_mode",
     "kills", "deaths", "assists", "gold_per_min", "xp_per_min", "duration",
+    "last_hits", "denies", "hero_damage", "tower_damage", "hero_healing",
+    "teamfight_participation",
     "purchase_ward_observer", "purchase_ward_sentry",
     "cluster",  # server/region the match was played on
 ]
@@ -19,8 +21,8 @@ MATCH_PROJECTION = [
 # Cache section name for the match sample. Bumped when the projection grows, so
 # old caches refetch instead of silently missing fields (_v4 added parsed lane
 # efficiency, roaming and ward-purchase fields).
-MATCHES_SECTION = "matches_v4"
-_MATCHES_FALLBACKS = ["matches_v3", "matches_v2", "matches"]
+MATCHES_SECTION = "matches_v5"
+_MATCHES_FALLBACKS = ["matches_v4", "matches_v3", "matches_v2", "matches"]
 
 
 def fetch_player_sections(od, cache, player, force=False, offline=False):

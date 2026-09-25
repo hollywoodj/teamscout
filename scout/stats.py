@@ -79,5 +79,49 @@ def wilson_lower(wins, n, z=1.28):
     return (centre - spread) / denom
 
 
+def _log_fact(n):
+    total = 0.0
+    for i in range(2, n + 1):
+        total += math.log(i)
+    return total
+
+
+def _log_binom(n, k):
+    if k < 0 or k > n:
+        return float("-inf")
+    return _log_fact(n) - _log_fact(k) - _log_fact(n - k)
+
+
+def fisher_exact(a, b, c, d):
+    """Two-sided Fisher's exact p-value for the 2x2 table [[a, b], [c, d]].
+
+    Integer counts only. Returns None if the table is empty. Uses the
+    standard 'sum tables at least as unlikely as the observed one' definition,
+    so a captain can paste the same W-L split into a calculator and match it.
+    """
+    cells = (a, b, c, d)
+    if any(not isinstance(x, int) or isinstance(x, bool) or x < 0 for x in cells):
+        return None
+    n = a + b + c + d
+    if n == 0:
+        return None
+    row1 = a + b
+    col1 = a + c
+
+    def logp(aa):
+        cc = col1 - aa
+        return _log_binom(row1, aa) + _log_binom(n - row1, cc) - _log_binom(n, col1)
+
+    log_obs = logp(a)
+    lo = max(0, row1 + col1 - n)
+    hi = min(row1, col1)
+    total = 0.0
+    for aa in range(lo, hi + 1):
+        lp = logp(aa)
+        if lp <= log_obs + 1e-9:
+            total += math.exp(lp)
+    return min(1.0, total)
+
+
 def clamp(x, lo, hi):
     return max(lo, min(hi, x))

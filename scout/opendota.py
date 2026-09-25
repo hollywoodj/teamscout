@@ -67,6 +67,28 @@ class OpenDota:
     def match(self, match_id):
         return self.get(f"/matches/{int(match_id)}")
 
+    def request_parse(self, match_id):
+        """Ask OpenDota to parse a finished match. Ward coordinates live in that parse."""
+        url = f"{config.API_BASE}/request/{int(match_id)}"
+        params = {"api_key": config.API_KEY} if config.API_KEY else None
+        wait = config.API_DELAY - (time.monotonic() - self._last_call)
+        if wait > 0:
+            time.sleep(wait)
+        self._last_call = time.monotonic()
+        self.calls += 1
+        try:
+            response = self.session.post(url, params=params, timeout=20)
+        except Exception as exc:
+            print(f"  ✗ Parse request failed for {match_id}: {exc}")
+            return None
+        if response.status_code in (200, 400):
+            try:
+                return response.json()
+            except ValueError:
+                return {}
+        print(f"  ⚠ HTTP {response.status_code} requesting parse for {match_id}")
+        return None
+
     def wordcloud(self, sid):
         return self.get(f"/players/{sid}/wordcloud")
 
@@ -79,6 +101,10 @@ class OpenDota:
     def constants_heroes(self):
         return self.get("/constants/heroes")
 
+    def constants_patch(self):
+        """Major-patch ids, names, and release timestamps."""
+        return self.get("/constants/patch")
+
     def hero_stats(self):
         """Current-patch pub pick/win counts per hero, split by rank bracket."""
         return self.get("/heroStats")
@@ -86,3 +112,15 @@ class OpenDota:
     def hero_matchups(self, hero_id):
         """Per-opponent games/wins for one hero (organized-match sample)."""
         return self.get(f"/heroes/{hero_id}/matchups")
+
+    def search(self, query):
+        """Steam persona-name search (Team Scout's "pull player" lookup)."""
+        return self.get("/search", params={"q": query})
+
+    def league(self, league_id):
+        """League metadata: name, tier, ticket, banner."""
+        return self.get(f"/leagues/{int(league_id)}")
+
+    def league_match_ids(self, league_id):
+        """Every match id OpenDota has recorded for one league (any tier)."""
+        return self.get(f"/leagues/{int(league_id)}/matchIds")

@@ -550,6 +550,16 @@ class StatsTests(unittest.TestCase):
         self.assertIsNone(stats.wilson_lower(0, 0))
         self.assertLess(stats.wilson_lower(7, 10), 0.7)
 
+    def test_fisher_exact_matches_enumerable_tables_and_guards_empty(self):
+        from scout import stats
+        self.assertIsNone(stats.fisher_exact(0, 0, 0, 0))
+        self.assertIsNone(stats.fisher_exact(-1, 0, 0, 0))
+        self.assertIsNone(stats.fisher_exact(True, 1, 1, 1))
+        self.assertAlmostEqual(stats.fisher_exact(1, 1, 1, 1), 1.0)
+        self.assertAlmostEqual(stats.fisher_exact(2, 0, 0, 2), 1 / 3)
+        # [[8, 2], [1, 5]] is a textbook two-sided example (~0.03497).
+        self.assertAlmostEqual(stats.fisher_exact(8, 2, 1, 5), 0.034965, places=5)
+
     def test_clamp(self):
         from scout import stats
         self.assertEqual(stats.clamp(5, 0, 10), 5)

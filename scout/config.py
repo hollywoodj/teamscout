@@ -241,9 +241,32 @@ HERODRAFT_TOP_META = 30              # most-picked heroes used for the
 #   patch   (base winrate − 50, in %)      × W_PATCH
 #   vs      (Σ advantage vs enemy picks, %)× W_VS
 #   with    (Σ coverage synergy w/ allies) × W_WITH
+#   scout   (official first picks / wins)  × W_SCOUT
 HERODRAFT_W_COMFORT = 2.0
 HERODRAFT_W_PATCH = 0.4
 HERODRAFT_W_VS = 0.35
 HERODRAFT_W_WITH = 0.25
+# Official Team Scout draft book (first-pick openers, winning heroes, bans).
+HERODRAFT_W_SCOUT = 1.8
 HERODRAFT_WINPROB_K = 0.10     # logistic slope: rating gap -> win probability
 HERODRAFT_WINPROB_CLAMP = 12.0 # win prob shown within [12, 88]%
+
+# ---- Mirrored team scouting workspace (--teamscout) ----
+TEAMSCOUT_PORT = 8324
+TEAMSCOUT_PATCH_TTL_HOURS = 6
+TEAMSCOUT_OVERRIDES_FILE = "teamscout_overrides.json"  # pulled players + roster edits
+TEAMSCOUT_BBC_POLL_SECONDS = 20  # reload when BBC feed/match cache changes
+# --auto-refresh (the always-on service): background OpenDota refresh. Sized for
+# the free tier (no API key): roughly 1,000 calls/day across ~185 players.
+TEAMSCOUT_REFRESH_HOURS = 12
+TEAMSCOUT_REFRESH_FIRST_DELAY = 120  # seconds after startup, so boot stays quick
+TEAMSCOUT_MATCHES_TTL_HOURS = 11     # just under the cycle, so each pass refetches
+TEAMSCOUT_SLOW_TTL_HOURS = 72        # rank and lifetime heroes move slowly
+TEAMSCOUT_ESPORTS_BUDGET = 150       # single-match league lookups per pass
+# RD2L EST-TUES Season 39. Profile ids on rd2l.gg are Steam32.
+RD2L_BASE = "https://rd2l.gg"
+RD2L_SEASON_ID = "4ZqJYHL--bj23PgPgu6Dy"
+RD2L_DIVISION_ID = "U-ZTEMOBg"
+RD2L_CACHE_FILE = "rd2l_cache.json"
+RD2L_MATCHES_FILE = "rd2l_matches.json"
+RD2L_CACHE_HOURS = 6

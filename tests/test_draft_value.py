@@ -82,14 +82,17 @@ class ProjectionAndRawMetricTests(unittest.TestCase):
 
         for field in (
             "version",
+            "patch",
             "lane",
             "lane_efficiency_pct",
             "is_roaming",
+            "hero_damage",
+            "tower_damage",
             "purchase_ward_observer",
             "purchase_ward_sentry",
         ):
             self.assertIn(field, MATCH_PROJECTION)
-        self.assertEqual(MATCHES_SECTION, "matches_v4")
+        self.assertEqual(MATCHES_SECTION, "matches_v5")
 
     def test_build_metrics_normalizes_lane_efficiency_and_vision_per_30(self):
         metrics = build_metrics(

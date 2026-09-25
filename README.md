@@ -9,7 +9,10 @@ signup list, enriches every player with OpenDota data, and produces:
   (sort/filter/search, draft board with best-available-by-position, compare tray;
   drafted marks persist in localStorage — works offline, safe to refresh mid-draft).
   The **Esports 6mo WR** column shows verified OpenDota ticketed-match win rate
-  and sample size, such as `56% (9g)`. The **Draft Value** column ranks the
+  and sample size, such as `56% (9g)`. This figure comes from OpenDota's
+  Explorer, which only covers pro/premium leagues - it does not see amateur
+  leagues like LD2L itself (Team Scout's per-player Esports tab uses a
+  different, slower method that does). The **Draft Value** column ranks the
   pool with a confidence-weighted combination of auction edge, verified league
   proof, recent lane results, role fit, vision/dewarding, and targeted hero fit.
 - **`scout_reports/`** — one self-contained HTML **scout report per player**
@@ -32,6 +35,7 @@ python ld2l_scout.py --live          # draft day: follow the live draft (read-on
 python ld2l_scout.py --mock          # practice: local mock auction vs AI captains
 python ld2l_scout.py --mock --me "Hollywood"   # pick your seat (default: Hollywood)
 python ld2l_scout.py --herodraft     # practice: Captains Mode hero draft vs a bot
+python ld2l_scout.py --teamscout     # mirror: scout your team against an opponent
 ```
 
 Optional: set `OPENDOTA_API_KEY` for faster/uncapped API access. Without it the
@@ -45,6 +49,150 @@ runs fetch only newly selected matches and offline runs reuse the cache.
 The separate Captains Mode/full-stack organized-play heuristic remains an
 internal scouting signal; it is not presented as proof that a match belonged
 to a ticketed league.
+
+**Team Scout (`--teamscout`)** is a mirrored team-versus-opponent web app at
+**http://127.0.0.1:8324/**. Pick either side from the current LD2L Season 22
+teams, or assemble a custom five-player roster. Four focused pages keep team
+work separate: Your Team, Player Breakdown, Opponent, and a mirrored Matchup.
+Team pages include hero pools, deep stats, and patch history. Player detail
+includes lifetime hero records, this week,
+current patch, recent-patch history, and a full row for every cached match.
+
+Team Scout's analysis treats wins and losses as separate populations. For the
+selected window it compares KDA, deaths, farm, XP, damage, tower pressure, lane
+efficiency, ward purchases, and teamfight participation, then calls out the
+largest observed differences. These are descriptive associations, not causal
+claims; the UI shows sample sizes and a Wilson 95% win-rate range, warns on tiny
+win/loss groups, and notes that player-games from the same match can be
+correlated.
+
+**Observed position** is inferred match by match from physical lane, the
+hero's normal positional profile, farm pattern, and ward purchases. Every call
+is labelled high/medium/low confidence because OpenDota's lane role cannot by
+itself distinguish Pos 1 from Pos 5 or Pos 3 from Pos 4. Team and player pages
+show the complete Pos 1-5 distribution and win rate at each inferred position;
+the match logs show the position, confidence, and underlying evidence for each
+game. Signup preference remains visible as a separate claim.
+
+**Best Heroes** is success-ranked rather than volume-ranked. A beta-binomial
+style evidence score shrinks small-sample win rates toward 50%, preventing a
+single 1-0 hero from outranking a sustained record. Record, raw win rate,
+inferred position, sample quality, and every roster player contributing to the
+result are shown. The separate **Most exposed heroes** list remains ordered by
+games because comfort/bannability and proven success answer different scouting
+questions.
+
+Current teams, rosters, week, and standings come read-only from the sibling BBC
+show feed. Official win rate and official-match breakdowns come from BBC's
+cached current-season OpenDota match payloads, including opponent, hero,
+K/D/A, economy, lane efficiency, damage, and dewarding. Public-match history
+continues to use the scout cache, so `--teamscout --offline` is draft-night safe.
+
+### Player heroes and esports
+
+A player's **Pubs** tab now means real ranked/unranked matches only - practice
+lobbies (league and inhouse games) and Turbo are excluded, so a player's public
+form is not padded by scrims or their own league games. The new **Heroes** tab
+turns that same 180-day pub sample, lifetime hero history, official record, and
+esports record into one hero pool table, plus a **Hidden gems** list: heroes
+the player does well on but rarely shows in officials. A hero counts as a gem
+when it clears a shrunk win-rate bar (small samples count less), isn't already
+one of their five most-played "comfort" heroes, isn't stale (unplayed in over
+a year), and has at most one official appearance so far - roughly, "heroes
+they're quietly good at but nobody's drafted for them yet."
+
+The new **Esports** tab is Team Scout's answer to a Dotabuff esports profile,
+covering every ticketed league a player has queued into, amateur leagues
+included. Dotabuff itself blocks automated access, and OpenDota's own Explorer
+(used for the dashboard's Esports 6mo WR column) only indexes pro/premium
+leagues - it returns zero rows for LD2L. Instead, Team Scout walks every
+practice lobby a player has played via OpenDota's player-matches endpoint,
+resolves each one's league one call at a time, and once a league is found,
+pulls its complete match list for free (that list covers amateur tiers too).
+Results are cached forever. The always-on service keeps this history
+updated on its own (see Always on below); `python ld2l_scout.py
+--refresh-esports` is an optional manual catch-up pass. Each run spends at
+most 250 single-match lookups, so a first pass over a lobby-heavy pool can
+take a few runs; the Esports tab shows how many lobby games are still
+unclassified, and the online main scout run chips away at it too.
+
+## Always on
+
+Team Scout runs as a Windows Scheduled Task (`Team Scout`) that starts at logon and self-heals every 5 minutes. Bookmark **http://127.0.0.1:8324**. The service serves from cache (`--offline`) so the bookmark stays up without hitting the network.
+
+The service also runs with `--auto-refresh`: two minutes after startup, and every 12 hours after that, a background thread pulls fresh OpenDota data for every Team Scout player (their recent match sample, which Recon and the Pubs/Heroes tabs read; rank and lifetime heroes every 3 days), classifies up to 150 more esports lobby games, then rebuilds the page. The page is still built from cache only, so if OpenDota is down the refresh logs a warning and the bookmark keeps serving the last good data. It is sized for OpenDota's free tier (about 1,000 calls a day); the knobs are the `TEAMSCOUT_*` refresh constants in `scout/config.py`. Progress lines start with `↻ Auto-refresh` in `logs	eamscout.log`. You never need to run `--refresh-esports` by hand; it stays available for a big catch-up pass.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File services\install_teamscout_task.ps1
+```
+
+To pick up a fresh scout run: `Stop-ScheduledTask -TaskName 'Team Scout'; Start-ScheduledTask -TaskName 'Team Scout'`. Logs: `logs\teamscout.log`.
+
+The always-on process also watches BBC's `feed.json` and match cache. When a new week is posted, Team Scout rebuilds itself within about 20 seconds. This week's series is on the **Teams** page; click a row to open that matchup.
+
+Manual `python ld2l_scout.py --teamscout` still opens a browser; the always-on task uses `--no-browser`.
+
+## Sharing it with the team
+
+Team Scout is published to the internet through a Tailscale Funnel on the
+`bbc-show` node:
+
+**https://bbc-show.tail9d49f5.ts.net:8443/** -> `127.0.0.1:8324`
+
+That node already funnels BBC ControlRoom on 443. The two coexist; Funnel only
+permits 443, 8443 and 10000, so Team Scout takes 8443. Both are registered in
+`Dev/PORTS.md`.
+
+> `tailscale funnel reset` wipes **every** funnel on the node, BBC's included.
+> To retire only this one: `tailscale funnel --https=8443 off`.
+
+### The password
+
+Every request needs HTTP basic auth - there is **no loopback exemption**, and
+that is deliberate: Funnel proxies inbound public traffic to `127.0.0.1:8324`,
+so a funnelled request and a local browser arrive from the same address. A
+loopback bypass would be a bypass for the whole internet.
+
+`teamscout_auth.txt` at the repo root is gitignored and never committed. With
+nothing in that file and no `$TEAMSCOUT_PASSWORD`, the server refuses to start
+rather than serving unauthenticated.
+
+**One shared password.** A file with a single line and no colon is one secret
+for the whole app. Any username works. `$TEAMSCOUT_PASSWORD` does the same
+thing and overrides the file.
+
+**One sign-in per team.** Give each team its own username, password, and
+league. A line looks like:
+
+```
+ld2l:choose-a-password:ld2l:Your LD2L Team Name
+rd2l:a-different-password:rd2l:Your RD2L Team Name
+```
+
+The team name is the posted name (capitalization and a leading "The" do not
+matter). The password cannot contain a colon. That sign-in is locked to its
+team: My Team cannot be switched, roster edits and pulled players stay in
+that sign-in, and the other league is not in the page at all. Within the same
+league, opponents are still there so you can scout the week, but only the
+posted roster — not the other sign-in's private edits.
+
+A line with no colon can stay in the file next to those. It remains the
+shared password: any username, and it sees the LD2L league only.
+
+An admin sign-in sees every team sign-in in one session. The line is
+`admin:password:*` (the `*` is the whole third field). Team passwords still
+cannot open that view.
+
+The browser remembers one login for the site. Use **Sign out** (or a separate
+browser profile) to switch teams. Two teams open at once means two profiles.
+
+To rotate or add a team: edit `teamscout_auth.txt`, then
+`Stop-ScheduledTask -TaskName 'Team Scout'; Start-ScheduledTask -TaskName 'Team Scout'`.
+
+Failed attempts are logged to `logs	eamscout.log` with the client's public IP
+from `X-Forwarded-For`, and each failure costs the caller a one-second delay.
+Worth a glance now and then - the hostname is discoverable in public
+Certificate Transparency logs, so it will get probed.
 
 ## How the numbers are computed
 
@@ -238,17 +386,20 @@ on a board **laid out like the Dota client** — your picks stack down one side,
 theirs down the other, ban strips and the phase timer across the top, and the
 hero pool in the four attribute columns (Strength / Agility / Intelligence /
 Universal, alphabetical, portraits only) in the exact in-game arrangement. Build
-your roster and the enemy roster from the cached signup pool (persisted to
-`herodraft_teams.json`), name the opposition, choose first pick and side — or
-coin-flip both. The draft order is the current **patch 7.40** Captains Mode
-sequence (first-pick bans 3-2-2 / second-pick 4-1-2, picks 1-3-1 both sides),
-with the real clocks: 15s first ban phase, 30s everything else, 130s reserve
-each, timed-out ban = no ban, timed-out pick = random hero.
+your roster and the enemy roster from the cached signup pool **or pick the
+same teams Team Scout is using** (persisted to `herodraft_teams.json`), name
+the opposition, choose first pick and side — or coin-flip both. The draft
+order is the current **patch 7.40** Captains Mode sequence (first-pick bans
+3-2-2 / second-pick 4-1-2, picks 1-3-1 both sides), with the real clocks:
+15s first ban phase, 30s everything else, 130s reserve each, timed-out ban =
+no ban, timed-out pick = random hero.
 
-The bot drafts the enemy side from their **real data**: each player's lifetime
-hero stats, 180-day form, and specifically the heroes they play in organized-
-league games (the same lobby fingerprint the scout uses); its bans target
-*your* roster's comfort heroes the same way.
+The bot drafts the enemy side from **Team Scout's official pick/ban book** —
+the first-pick heroes they've actually opened and won with, their most
+successful league heroes, and the bans they repeat — plus each player's
+lifetime stats, 180-day form, and organized-league comfort. If they have
+first-picked a hero 3–0 and you leave it up, they take it. Bans still
+target *your* roster's comfort heroes and their signature openers.
 
 **Hero ratings + win probability**: every draftable hero shows a Dotabuff-style
 rating (e.g. **+4.10**) on its tile and in the Scouting Report, combining four
@@ -375,6 +526,9 @@ scout/
   mockdraft.py     --mock mode: local practice auction vs AI captains (offline)
   herodraft.py     --herodraft mode: Captains Mode pick/ban practice vs a bot
   herodraft_html.py  Dota-themed draft board page (served by herodraft.py)
+  bbc_source.py    read-only current-season team/official adapter for BBC artifacts
+  team_scout.py    --teamscout payload builder and localhost server
+  team_scout_html.py mirrored team/opponent scouting interface
   report_xlsx.py   Excel workbook
   report_html.py   HTML dashboard
   report_mock_html.py  interactive mock-draft board (served by mockdraft.py)

@@ -57,9 +57,10 @@ button.primary{background:linear-gradient(180deg,var(--go-hi),var(--go));
   border-color:#3F6614; color:#0E1408}
 button.primary:hover:not(:disabled){filter:brightness(1.12); color:#0E1408}
 :focus-visible{outline:2px solid var(--ink-hi); outline-offset:2px}
-input[type=text]{background:#0E1218; border:1px solid var(--rule); color:var(--ink);
+input[type=text],select{background:#0E1218; border:1px solid var(--rule); color:var(--ink);
   padding:6px 9px; font:400 12.5px var(--ui); width:100%; border-radius:2px}
 input[type=text]::placeholder{color:#5D6874}
+select{margin-bottom:6px}
 .wrap{max-width:1720px; margin:0 auto}
 
 /* ================= setup ================= */
@@ -325,12 +326,14 @@ body.burning .clock.reserve{animation:ticktock 1s steps(1) infinite}
     <div class="teamcols">
       <div class="tcol mine">
         <h2>Your team</h2>
+        <select id="mineLeague" aria-label="Your Team Scout team"></select>
         <div class="chips" id="mineChips"></div>
         <input type="text" id="mineSearch" placeholder="Search players" aria-label="Search players for your team">
         <div class="plist" id="mineList"></div>
       </div>
       <div class="tcol enemy">
         <h2>Opposition</h2>
+        <select id="enemyLeague" aria-label="Opposition Team Scout team"></select>
         <input type="text" id="enemyName" placeholder="Opposition team name" style="margin-bottom:6px" aria-label="Opposition team name">
         <div class="chips" id="enemyChips"></div>
         <input type="text" id="enemySearch" placeholder="Search players" aria-label="Search players for the opposition">
@@ -436,6 +439,7 @@ body.burning .clock.reserve{animation:ticktock 1s steps(1) infinite}
 <script>
 const HEROES = __HEROES__;   // hid -> {n, key, attr}
 const POOL   = __POOL__;     // [{steam32, name, mmr, role}]
+const LEAGUE = __LEAGUE__;   // [{key, name, short, roster}]
 const CDN = "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/";
 /* attribute colours as the client shows them */
 const ATTRS = [["str","Strength","#EE3B21"],["agi","Agility","#26E030"],
@@ -443,6 +447,7 @@ const ATTRS = [["str","Strength","#EE3B21"],["agi","Agility","#26E030"],
 
 let ST = null;
 let mineSel = [], enemySel = [];
+let mineKey = "", enemyKey = "";
 let firstChoice = "random", sideChoice = "random";
 let selectedHid = null;
 let heroQuery = "";
@@ -501,6 +506,37 @@ function renderLists(){
   mk(mineSel, enemySel, document.getElementById("mineSearch").value, "mineList");
   mk(enemySel, mineSel, document.getElementById("enemySearch").value, "enemyList");
 }
+function leagueByKey(key){ return (LEAGUE || []).find(t => t.key === key); }
+function fillLeagueSelects(){
+  [["mineLeague","Your Team Scout team"],
+   ["enemyLeague","Opposition from Team Scout"]].forEach(([id, blank]) => {
+    const el = document.getElementById(id);
+    el.innerHTML = '<option value="">' + esc(blank) + '</option>';
+    (LEAGUE || []).forEach(t => {
+      const o = document.createElement("option");
+      o.value = t.key;
+      o.textContent = t.short === t.name ? t.name : (t.short + " — " + t.name);
+      el.appendChild(o);
+    });
+  });
+}
+function applyLeague(side, key){
+  const t = leagueByKey(key);
+  if (side === "mine"){
+    mineKey = t ? t.key : "";
+    if (t) mineSel = t.roster.filter(id => !enemySel.includes(id)).slice(0, 5);
+  } else {
+    enemyKey = t ? t.key : "";
+    if (t){
+      enemySel = t.roster.filter(id => !mineSel.includes(id)).slice(0, 5);
+      document.getElementById("enemyName").value = t.name;
+    }
+  }
+  document.getElementById(side === "mine" ? "mineLeague" : "enemyLeague").value = key || "";
+  renderChips(); renderLists();
+}
+document.getElementById("mineLeague").onchange = e => applyLeague("mine", e.target.value);
+document.getElementById("enemyLeague").onchange = e => applyLeague("enemy", e.target.value);
 document.getElementById("mineSearch").oninput = renderLists;
 document.getElementById("enemySearch").oninput = renderLists;
 function seg(id, set){
@@ -519,7 +555,8 @@ document.getElementById("startBtn").onclick = async () => {
     warn.textContent = "Both teams need at least one player."; return; }
   warn.textContent = "";
   let r = await post("/draft/teams", { mine: mineSel, enemy: enemySel,
-    enemy_name: document.getElementById("enemyName").value || "The Dire" });
+    enemy_name: document.getElementById("enemyName").value || "The Dire",
+    mine_key: mineKey || null, enemy_key: enemyKey || null });
   if (!r.ok){ warn.textContent = r.msg || "Couldn't save teams."; return; }
   r = await post("/draft/start", { first: firstChoice, side: sideChoice });
   if (!r.ok) warn.textContent = r.msg || "Couldn't start the draft.";
@@ -800,6 +837,7 @@ function partsLine(p){
   if (!p) return "";
   const bits = [];
   bits.push("comfort " + rtText(p.c));
+  if (p.s) bits.push("scout " + rtText(p.s));
   if (p.base != null) bits.push("patch " + rtText(p.p) + " (" + p.base.toFixed(1) + "%)");
   if (p.v) bits.push("vs " + rtText(p.v));
   if (p.w) bits.push("with " + rtText(p.w));
@@ -886,6 +924,14 @@ async function poll(){
       renderChips(); renderLists(); }
     if (!enemySel.length && ST.enemy_roster.length) { enemySel = ST.enemy_roster.slice();
       renderChips(); renderLists(); }
+    if (!mineKey && ST.mine_key){
+      mineKey = ST.mine_key;
+      document.getElementById("mineLeague").value = mineKey;
+    }
+    if (!enemyKey && ST.enemy_key){
+      enemyKey = ST.enemy_key;
+      document.getElementById("enemyLeague").value = enemyKey;
+    }
     const en = document.getElementById("enemyName");
     if (!en.value && ST.enemy_name && ST.enemy_name !== "The Dire")
       en.value = ST.enemy_name;
@@ -900,19 +946,21 @@ async function poll(){
 setInterval(() => { if (ST && ST.turn) renderTurn(); }, 250);  // smooth clock
 setInterval(poll, 500);
 
-buildGrid(); renderLists(); poll();
+buildGrid(); fillLeagueSelects(); renderLists(); poll();
 </script>
 </body>
 </html>
 """
 
 
-def render_page(pool, heroes, label):
+def render_page(pool, heroes, label, league_teams=None):
     heroes_json = json.dumps({str(k): v for k, v in heroes.items()}).replace(
         "</", "<\\/"
     )
     pool_json = json.dumps(pool).replace("</", "<\\/")
+    league_json = json.dumps(league_teams or []).replace("</", "<\\/")
     return (PAGE
             .replace("__HEROES__", heroes_json)
             .replace("__POOL__", pool_json)
+            .replace("__LEAGUE__", league_json)
             .replace("__LABEL__", html.escape(str(label or "LD2L"))))

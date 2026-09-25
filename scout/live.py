@@ -161,8 +161,18 @@ def _socket_loop(state, stop):
     """
     try:
         import socketio
-        if not socketio.__version__.startswith("4"):
-            print("  ⚠ python-socketio v" + socketio.__version__ + " can't speak to "
+        # 4.x exposes socketio.__version__; 5.x dropped the module attribute, so
+        # reading it there raises AttributeError — which this guard used to let
+        # escape into a traceback on the scout's own output (2026-09-17, after
+        # BBC's pinned 5.x client replaced the 4.x one machine-wide). Ask the
+        # package metadata instead, which answers for every version.
+        try:
+            from importlib.metadata import version as _pkg_version
+            installed = _pkg_version("python-socketio")
+        except Exception:
+            installed = getattr(socketio, "__version__", "unknown")
+        if not installed.startswith("4"):
+            print("  ⚠ python-socketio v" + installed + " can't speak to "
                   "the site's socket.io v2 — nomination banner off. For it, run: "
                   'pip install "python-socketio<5" "python-engineio<4" websocket-client')
             return

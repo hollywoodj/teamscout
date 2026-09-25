@@ -3,6 +3,14 @@ openpyxl
 # Optional, for --live mode's "on the block" banner (the site runs socket.io v2,
 # which needs the 4.x python client). Without these, --live still auto-marks
 # completed picks via polling — you just don't see nominations/bids.
+#
+# ⚠ CONFLICT: installing these two into the shared pythoncore-3.14 interpreter
+# DOWNGRADES the 5.x client BBC pins (BBC/requirements.txt), and BBC's
+# show/program.py then can't reach Control Room at all — it just retries
+# forever. That happened on 2026-09-17. If you need the live banner, put it in
+# a venv for this project rather than installing it machine-wide; scout/live.py
+# already degrades to polling with a printed warning when the 5.x client is
+# what's installed.
 python-socketio<5
 python-engineio<4
 websocket-client

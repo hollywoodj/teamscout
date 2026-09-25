@@ -19,6 +19,7 @@ from .fetch import (apply_mmr_baseline, fetch_player_sections,
                     players_from_snapshot, signup_delta)
 from .heroes import load_hero_map
 from .ld2l import scrape_signups
+from .league_history import refresh_league_history
 from .opendota import OpenDota
 from .report_html import generate_dashboard
 from .report_player_html import generate_player_reports, report_filenames
@@ -96,6 +97,17 @@ def run_scout(args):
         if deep_calls:
             cached_note += f", {deep_calls} deep"
         print(f"  [{i}/{len(players)}] {player['name']} ({player['mmr']} MMR) [{cached_note}]")
+
+    if not args.offline:
+        # Team Scout's esports record (Dotabuff-equivalent, but covers
+        # amateur leagues Dotabuff's own numbers don't). Best-effort: this
+        # must never fail the main scout run.
+        try:
+            refresh_league_history(
+                od, cache, [player["steam32"] for player in players],
+            )
+        except Exception as exc:
+            print(f"  ⚠ League history refresh failed: {exc}", flush=True)
 
     if args.offline:
         history = cache.get_blob("auction_history_v2") or {}
@@ -252,6 +264,31 @@ def run_herodraft_mode(args):
     run_herodraft(args.season, port=port, offline=args.offline)
 
 
+def run_team_scout_mode(args):
+    """Serve the mirrored current-season team and opponent scout."""
+    from .team_scout import run_team_scout
+
+    port = args.port if args.port != 8322 else config.TEAMSCOUT_PORT
+    run_team_scout(
+        args.season,
+        port=port,
+        offline=args.offline,
+        open_browser=not args.no_browser,
+        auto_refresh=args.auto_refresh,
+    )
+
+
+def run_refresh_esports_mode(args):
+    """Resolve Team Scout's OpenDota-based esports history and exit (does
+    not start the server; the always-on Team Scout task holds the port)."""
+    from .team_scout import refresh_esports_history
+
+    if args.offline:
+        print("  ✗ --refresh-esports needs the network; drop --offline.")
+        raise SystemExit(1)
+    refresh_esports_history(args.season)
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description="LD2L Scouting Tool")
     parser.add_argument("--season", type=int, default=config.DEFAULT_SEASON_ID,
@@ -294,7 +331,23 @@ def build_parser():
     parser.add_argument("--herodraft", action="store_true",
                         help="Hero draft practice: Captains Mode pick/ban "
                              "(patch 7.40 order) against a bot that drafts "
-                             "from the enemy roster's real hero data")
+                             "from Team Scout official picks/bans")
+    parser.add_argument("--teamscout", "--team-scout", dest="teamscout",
+                        action="store_true",
+                        help="Mirrored team/opponent web scout with current "
+                             "LD2L rosters, officials, hero history, and deep stats")
+    parser.add_argument("--refresh-esports", action="store_true",
+                        help="Resolve Team Scout's OpenDota-based esports "
+                             "history (Dotabuff-equivalent, amateur leagues "
+                             "included), print a summary, and exit. Needs "
+                             "the network; not combinable with --offline")
+    parser.add_argument("--auto-refresh", action="store_true",
+                        help="With --teamscout: refresh pub samples and esports "
+                             "history from OpenDota in the background every "
+                             f"{config.TEAMSCOUT_REFRESH_HOURS}h, then rebuild "
+                             "(the always-on service uses this)")
+    parser.add_argument("--no-browser", action="store_true",
+                        help="Do not open a browser tab (always-on service uses this)")
     parser.add_argument("--me", type=str, default=config.MOCK_DEFAULT_ME,
                         help=f"Your captain seat for --mock (default: "
                              f"{config.MOCK_DEFAULT_ME}; changeable in the UI)")
@@ -310,7 +363,11 @@ def main():
         sys.exit(0)
     signal.signal(signal.SIGINT, handle_sigint)
 
-    if args.herodraft:
+    if args.refresh_esports:
+        run_refresh_esports_mode(args)
+    elif args.teamscout:
+        run_team_scout_mode(args)
+    elif args.herodraft:
         run_herodraft_mode(args)
     elif args.mock:
         run_mock_mode(args)

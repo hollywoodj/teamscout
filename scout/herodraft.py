@@ -3,13 +3,12 @@
 Practice the ACTUAL Dota draft (heroes, not players) against the team you're
 about to face. Fully local; nothing is sent to ld2l.org or Steam.
 
-  - Rosters: you assemble your team and the enemy team from the cached signup
-    pool (searchable picker, persisted to herodraft_teams.json between runs).
-  - The bot drafts for the enemy using their real data: each player's lifetime
-    hero stats (OpenDota /heroes), their 180-day match sample (current form),
-    and specifically their organized-league games (lobby fingerprint — the
-    heroes they actually pull out when it counts). Bans target YOUR roster's
-    comfort picks the same way.
+  - Rosters: pick the same BBC / Team Scout teams you're scouting, or assemble
+    from the cached signup pool (persisted to herodraft_teams.json).
+  - The bot drafts for the enemy from Team Scout's official pick/ban book
+    (first-pick openers, successful heroes, their real bans) plus each
+    player's lifetime / 180-day / league comfort. Bans deny YOUR comfort
+    heroes and their signature openers the same way.
   - Draft order is Captains Mode as of patch 7.40 (2025-12-15): first-pick
     bans 3-2-2 / second-pick 4-1-2, picks 1-3-1 both sides, 15s first ban
     phase, 30s everything else, 130s reserve each. Timed out ban = no ban;
@@ -194,6 +193,191 @@ def team_threats(profiles, now=None):
 
 
 # --------------------------------------------------------------------------
+# Team Scout official draft book (same matches as --teamscout)
+# --------------------------------------------------------------------------
+
+def first_pick_side(picks_bans):
+    """Radiant=0 / Dire=1 of the first actual pick, or None if no draft data."""
+    picks = []
+    for i, entry in enumerate(picks_bans or []):
+        if not entry.get("is_pick"):
+            continue
+        order = entry.get("order")
+        order = i if order is None else order
+        picks.append((order, 1 if entry.get("team") == 1 else 0))
+    if not picks:
+        return None
+    picks.sort()
+    return picks[0][1]
+
+
+def _stat():
+    return {"g": 0, "w": 0}
+
+
+def build_draft_book(team_matches, team_key):
+    """Pick/ban frequencies for one BBC team_key from Team Scout match rows."""
+    picks, bans = {}, {}
+    openers = {True: {}, False: {}}
+    games = 0
+    for match in team_matches or []:
+        radiant = (match.get("radiant") or {}).get("team_key")
+        dire = (match.get("dire") or {}).get("team_key")
+        if radiant == team_key:
+            team_num, win = 0, bool(match.get("radiant_win"))
+        elif dire == team_key:
+            team_num, win = 1, not bool(match.get("radiant_win"))
+        else:
+            continue
+        games += 1
+        pb = match.get("picks_bans") or []
+        fp = first_pick_side(pb)
+        is_fp = fp is not None and fp == team_num
+        their_picks = []
+        for entry in pb:
+            try:
+                hid = int(entry.get("hero_id"))
+            except (TypeError, ValueError):
+                continue
+            side = 1 if entry.get("team") == 1 else 0
+            if side != team_num:
+                continue
+            if entry.get("is_pick"):
+                their_picks.append(hid)
+            else:
+                bans[hid] = bans.get(hid, 0) + 1
+        if their_picks:
+            opener = openers[is_fp].setdefault(their_picks[0], _stat())
+            opener["g"] += 1
+            opener["w"] += int(win)
+        for slot, hid in enumerate(their_picks):
+            rec = picks.setdefault(hid, {"g": 0, "w": 0, "slots": {}})
+            rec["g"] += 1
+            rec["w"] += int(win)
+            sl = rec["slots"].setdefault(slot, _stat())
+            sl["g"] += 1
+            sl["w"] += int(win)
+    return {"games": games, "picks": picks, "openers": openers, "bans": bans}
+
+
+def scout_pick_value(book, hid, pick_index, is_first_pick_team):
+    """How strongly this team's official drafts point at hid right now."""
+    if not book:
+        return 0.0
+    try:
+        hid = int(hid)
+    except (TypeError, ValueError):
+        return 0.0
+    score = 0.0
+    rec = book["picks"].get(hid)
+    if rec and rec["g"]:
+        wr = (rec["w"] + 1) / (rec["g"] + 2)
+        score += rec["g"] * (wr - 0.35)
+        sl = rec.get("slots", {}).get(pick_index)
+        if sl and sl["g"]:
+            score += 0.35 * sl["g"]
+    if pick_index == 0:
+        opener = book["openers"].get(bool(is_first_pick_team), {}).get(hid)
+        if opener and opener["g"]:
+            # Wins on the opener dominate: 3-0 first pick >> 0-3 habit.
+            score += opener["w"] * 1.5 + (opener["g"] - opener["w"]) * 0.15
+    return score
+
+
+def scout_ban_value(book, hid):
+    if not book:
+        return 0.0
+    try:
+        hid = int(hid)
+    except (TypeError, ValueError):
+        return 0.0
+    return book["bans"].get(hid, 0) * 0.55
+
+
+def scout_why(book, hid, kind, pick_index, is_first_pick_team):
+    """Short feed line from the official book, or ''."""
+    if not book:
+        return ""
+    try:
+        hid = int(hid)
+    except (TypeError, ValueError):
+        return ""
+    if kind == "ban":
+        n = book["bans"].get(hid, 0)
+        return f"banned {n}× in LD2L" if n else ""
+    if pick_index == 0:
+        opener = book["openers"].get(bool(is_first_pick_team), {}).get(hid)
+        if opener and opener["g"]:
+            losses = opener["g"] - opener["w"]
+            tag = "first-picked" if is_first_pick_team else "opened"
+            return f"{tag} {opener['w']}–{losses} in LD2L"
+    rec = book["picks"].get(hid)
+    if rec and rec["g"]:
+        return f"{rec['w']}–{rec['g'] - rec['w']} official"
+    return ""
+
+
+def load_league_context(od, cache, profiles, rows, offline=True):
+    """BBC teams + official draft books, same source as Team Scout.
+
+    Players on posted/override rosters who aren't in the signup snapshot are
+    appended to `rows` / `profiles` so the picker can seat them.
+    """
+    from .bbc_source import load_bbc_data
+    from .heroes import load_hero_map
+    from .overrides import load_overrides
+    from .team_scout import assemble_team
+
+    hero_map = load_hero_map(od, cache, offline=offline)
+    bbc = load_bbc_data(hero_map)
+    overrides = load_overrides()
+    # Team Scout stores each sign-in's roster edits in its own bucket. Fold
+    # those into the shared maps so a locked team's posted lineup still seats.
+    for bucket in (overrides.get("accounts") or {}).values():
+        if not isinstance(bucket, dict):
+            continue
+        overrides["rosters"].update(bucket.get("rosters") or {})
+        overrides["replaced"].update(bucket.get("replaced") or {})
+    id_to_name = {p["steam32"]: p["name"] for p in rows}
+    for sid, info in (bbc.get("players") or {}).items():
+        id_to_name.setdefault(sid, info.get("name") or f"Player {sid}")
+    teams, books = [], {}
+    extra_ids = []
+    for team in bbc.get("teams") or []:
+        assembled = assemble_team(
+            team, overrides, id_to_name, bbc.get("team_games"))
+        key = assembled["key"]
+        roster = list(assembled.get("roster") or [])[:5]
+        teams.append({
+            "key": key,
+            "name": assembled.get("name") or key,
+            "short": assembled.get("short") or assembled.get("name") or key,
+            "roster": roster,
+        })
+        books[key] = build_draft_book(bbc.get("teamMatches") or [], key)
+        extra_ids.extend(roster)
+    known = {p["steam32"] for p in rows}
+    for sid in extra_ids:
+        if sid in known:
+            continue
+        info = (bbc.get("players") or {}).get(sid) or {}
+        player = {
+            "steam32": sid,
+            "name": info.get("name") or id_to_name.get(sid) or f"Player {sid}",
+            "mmr": 0,
+            "pref_role": "Any",
+        }
+        sections, _ = fetch_player_sections(od, cache, player, offline=True)
+        profiles[sid] = build_profile(player, sections)
+        rows.append({"steam32": sid, "name": player["name"],
+                     "mmr": 0, "role": "Any"})
+        known.add(sid)
+    rows.sort(key=lambda r: -r["mmr"])
+    teams.sort(key=lambda t: t["name"].casefold())
+    return {"teams": teams, "books": books}
+
+
+# --------------------------------------------------------------------------
 # Hero meta: patch winrates + vs-matchups + 'with' coverage synergy
 # --------------------------------------------------------------------------
 
@@ -317,12 +501,12 @@ def load_meta(offline=False):
 # --------------------------------------------------------------------------
 
 def load_pool(season, offline=True):
-    """(label, [player rows], {steam32: profile}) from the scout cache."""
+    """(label, [player rows], {steam32: profile}, heroes, league) from cache."""
     cache = Cache()
     od = OpenDota()
     label, players = players_from_snapshot(cache, season)
     if not players:
-        return None, [], {}, {}
+        return None, [], {}, {}, {"teams": [], "books": {}}
     profiles = {}
     for p in players:
         sections, _ = fetch_player_sections(od, cache, p, offline=True)
@@ -332,7 +516,12 @@ def load_pool(season, offline=True):
              "mmr": p.get("mmr") or 0, "role": p.get("pref_role") or "Any"}
             for p in players]
     rows.sort(key=lambda r: -r["mmr"])
-    return label, rows, profiles, heroes
+    try:
+        league = load_league_context(od, cache, profiles, rows, offline=offline)
+    except OSError as exc:
+        print(f"  ⚠ Team Scout data unavailable: {exc}")
+        league = {"teams": [], "books": {}}
+    return label, rows, profiles, heroes, league
 
 
 # --------------------------------------------------------------------------
@@ -342,7 +531,8 @@ def load_pool(season, offline=True):
 class DraftState:
     """One practice draft. team index: 0 = first pick, 1 = second pick."""
 
-    def __init__(self, season, label, pool, profiles, heroes, meta=None):
+    def __init__(self, season, label, pool, profiles, heroes, meta=None,
+                 league=None):
         self._lock = threading.RLock()
         self.season = season
         self.label = label
@@ -350,6 +540,9 @@ class DraftState:
         self.profiles = profiles            # steam32 -> profile
         self.heroes = heroes                # hid -> {n,key,attr}
         self.meta = meta or {"base": {}, "adv": {}, "syn": {}}
+        league = league or {}
+        self.league_teams = league.get("teams") or []
+        self.books = league.get("books") or {}
         self.events = []
         self.rng = random.Random()
 
@@ -357,6 +550,8 @@ class DraftState:
         self.my_roster = []                 # steam32s
         self.enemy_roster = []
         self.enemy_name = "The Dire"
+        self.my_team_key = None
+        self.enemy_team_key = None
         self.me_first = None                # True = I am team F
         self.my_side = "radiant"            # cosmetic
 
@@ -372,6 +567,11 @@ class DraftState:
             self.my_roster = [int(s) for s in saved.get("mine", []) if int(s) in known][:5]
             self.enemy_roster = [int(s) for s in saved.get("enemy", []) if int(s) in known][:5]
             self.enemy_name = str(saved.get("enemy_name") or "The Dire")[:40]
+            keys = {t["key"] for t in self.league_teams}
+            mine_key = saved.get("mine_key")
+            enemy_key = saved.get("enemy_key")
+            self.my_team_key = mine_key if mine_key in keys else None
+            self.enemy_team_key = enemy_key if enemy_key in keys else None
         except (OSError, ValueError, TypeError):
             pass
 
@@ -379,7 +579,9 @@ class DraftState:
         try:
             with open(config.HERODRAFT_TEAMS_FILE, "w", encoding="utf-8") as f:
                 json.dump({"mine": self.my_roster, "enemy": self.enemy_roster,
-                           "enemy_name": self.enemy_name}, f, indent=2)
+                           "enemy_name": self.enemy_name,
+                           "mine_key": self.my_team_key,
+                           "enemy_key": self.enemy_team_key}, f, indent=2)
         except OSError as e:
             print(f"  ⚠ couldn't save rosters: {e}")
 
@@ -405,7 +607,13 @@ class DraftState:
         self.threats = [None, None]         # threat tables, built at start
         self.summary = None
 
-    def set_teams(self, mine, enemy, enemy_name):
+    def _valid_team_key(self, key):
+        if not key:
+            return None
+        key = str(key)
+        return key if any(t["key"] == key for t in self.league_teams) else None
+
+    def set_teams(self, mine, enemy, enemy_name, mine_key=None, enemy_key=None):
         with self._lock:
             if self.phase == "drafting":
                 return False, "draft in progress"
@@ -433,8 +641,15 @@ class DraftState:
                 return False, "a player cannot be on both rosters"
             self.my_roster = mine
             self.enemy_roster = enemy
+            self.my_team_key = self._valid_team_key(mine_key)
+            self.enemy_team_key = self._valid_team_key(enemy_key)
             if enemy_name:
                 self.enemy_name = str(enemy_name)[:40]
+            elif self.enemy_team_key:
+                for team in self.league_teams:
+                    if team["key"] == self.enemy_team_key:
+                        self.enemy_name = team["name"][:40]
+                        break
         self._save_rosters()
         return True, "ok"
 
@@ -514,6 +729,13 @@ class DraftState:
         s32s = self.my_roster if ti == self.my_team_index() else self.enemy_roster
         return [self.profiles[s] for s in s32s if s in self.profiles]
 
+    def _key_for(self, ti):
+        return self.my_team_key if ti == self.my_team_index() else self.enemy_team_key
+
+    def _book_for(self, ti):
+        key = self._key_for(ti)
+        return self.books.get(key) if key else None
+
     # ---- acting ----
     def act(self, ti, hid, auto=False):
         """Apply a ban/pick by team ti. hid None on a timed-out ban."""
@@ -582,8 +804,24 @@ class DraftState:
         return best["name"] if best_s > 0.1 else None
 
     def _reason_for(self, ti, hid, kind):
-        """Short 'why' for the feed: whose comfort hero this touches."""
-        table = self.threats[1 - ti] if kind == "ban" else self.threats[ti]
+        """Short 'why' for the feed: official draft book, else comfort."""
+        if kind == "pick":
+            why = scout_why(self._book_for(ti), hid, "pick",
+                            max(len(self.picks[ti]) - 1, 0), ti == 0)
+            if why:
+                return why
+            table = self.threats[ti]
+        else:
+            why = scout_why(self._book_for(ti), hid, "ban", 0, False)
+            deny = scout_why(self._book_for(1 - ti), hid, "pick",
+                             len(self.picks[1 - ti]), (1 - ti) == 0)
+            if why and deny:
+                return f"{why}; they {deny}"
+            if why:
+                return why
+            if deny:
+                return deny
+            table = self.threats[1 - ti]
         if table and hid in table:
             return table[hid][1]
         return ""
@@ -603,13 +841,14 @@ class DraftState:
         row = self.meta["syn"].get(a)
         return row.get(b, 0.0) if row else 0.0
 
-    def rating(self, ti, hid, now=None):
+    def rating(self, ti, hid, now=None, kind="pick", banner_ti=None):
         """Dotabuff-style board rating of hero hid for team ti, right now.
 
         Breakdown dict: comfort (roster evidence, best still-unassigned player
         preferred), patch (pub winrate dev from 50 in the LD2L brackets),
         vs (Σ matchup advantage over enemy picks), with (Σ coverage synergy
-        with own picks). total is the weighted sum shown as e.g. +4.10.
+        with own picks), scout (Team Scout official first picks / wins / bans).
+        total is the weighted sum shown as e.g. +4.10.
         """
         now = now or time.time()
         best_un, best_any = (0.0, ""), (0.0, "")
@@ -625,12 +864,26 @@ class DraftState:
         other = 1 - ti
         vs = sum(self._mu_adv(hid, e) for e in self.picks[other])
         wth = sum(self._mu_syn(hid, a) for a in self.picks[ti])
+        pick_index = len(self.picks[ti])
+        scout = scout_pick_value(self._book_for(ti), hid, pick_index, ti == 0)
+        if kind == "ban":
+            banner = self._book_for(banner_ti if banner_ti is not None else other)
+            scout = scout + scout_ban_value(banner, hid)
         total = (config.HERODRAFT_W_COMFORT * comfort
                  + config.HERODRAFT_W_PATCH * patch
                  + config.HERODRAFT_W_VS * vs
-                 + config.HERODRAFT_W_WITH * wth)
+                 + config.HERODRAFT_W_WITH * wth
+                 + config.HERODRAFT_W_SCOUT * scout)
+        scout_line = scout_why(
+            self._book_for(ti), hid, "pick", pick_index, ti == 0)
+        if kind == "ban":
+            scout_line = scout_why(
+                banner, hid, "ban", 0, False) or scout_line
+        if scout_line:
+            who = f"{scout_line}" + (f"; {who}" if who else "")
         return {"total": round(total, 2), "c": round(comfort, 2),
                 "p": round(patch, 2), "v": round(vs, 2), "w": round(wth, 2),
+                "s": round(scout, 2),
                 "base": base, "who": who}
 
     def win_probability(self):
@@ -668,19 +921,28 @@ class DraftState:
         """Top-k (hid, rating_dict) for team ti's ban or pick.
 
         Candidates come from the acting side's comfort pool (a ban denies the
-        OPPONENT's pool), ranked by the full board rating — comfort + patch
-        winrate + matchups — from the pool owner's perspective.
+        OPPONENT's pool) plus Team Scout's official pick/ban book, ranked by
+        the full board rating from the pool owner's perspective.
         """
         with self._lock:
             rate_ti = (1 - ti) if kind == "ban" else ti
-            table = self.threats[rate_ti]
-            if not table:
-                return []
+            table = self.threats[rate_ti] or {}
+            hids = set(table)
+            pick_book = self._book_for(rate_ti)
+            if pick_book:
+                hids.update(pick_book["picks"])
+                if kind == "ban":
+                    for side in pick_book["openers"].values():
+                        hids.update(side)
+            if kind == "ban":
+                ban_book = self._book_for(ti)
+                if ban_book:
+                    hids.update(ban_book["bans"])
             cands = []
-            for hid in table:
+            for hid in hids:
                 if hid in self.taken:
                     continue
-                r = self.rating(rate_ti, hid)
+                r = self.rating(rate_ti, hid, kind=kind, banner_ti=ti)
                 cands.append((r["total"], hid, r))
             cands.sort(key=lambda x: -x[0])
             return [(h, r) for _, h, r in cands[:k]]
@@ -746,7 +1008,7 @@ class DraftState:
                                     config.HERODRAFT_SUGGESTIONS)
         return [{"hid": h, "rating": r["total"],
                  "parts": {"c": r["c"], "p": r["p"], "v": r["v"], "w": r["w"],
-                           "base": r["base"]},
+                           "s": r["s"], "base": r["base"]},
                  "why": r["who"]} for h, r in cands]
 
     def _build_summary(self):
@@ -807,6 +1069,9 @@ class DraftState:
                              for h in self.heroes if h not in self.taken}
                             if turn and turn["is_me"] else None),
                 "has_meta": bool(self.meta["base"] or self.meta["adv"]),
+                "league_teams": self.league_teams,
+                "mine_key": self.my_team_key,
+                "enemy_key": self.enemy_team_key,
                 "teams": rosters,
                 "suggestions": self.suggestions() if self.phase == "drafting" else [],
                 "events": self.events[-40:],
@@ -868,7 +1133,9 @@ def _make_handler(state, page_bytes):
                 ok, msg = state.set_teams(
                     body.get("mine", []),
                     body.get("enemy", []),
-                    body.get("enemy_name"))
+                    body.get("enemy_name"),
+                    body.get("mine_key"),
+                    body.get("enemy_key"))
                 self._json(200 if ok else 400, {"ok": ok, "msg": msg})
             elif path == "/draft/start":
                 ok, msg = state.start(body.get("first", "random"),
@@ -895,7 +1162,7 @@ def run_herodraft(season, port=None, offline=False, open_browser=True):
 
     port = port or config.HERODRAFT_PORT
     print("\n⚔ Loading hero-draft pool from cache...")
-    label, pool, profiles, heroes = load_pool(season, offline=offline)
+    label, pool, profiles, heroes, league = load_pool(season, offline=offline)
     if not pool:
         print("  ✗ No cached player pool. Run the scout once first "
               "(python ld2l_scout.py), then start --herodraft.")
@@ -903,6 +1170,13 @@ def run_herodraft(season, port=None, offline=False, open_browser=True):
     league_players = sum(1 for p in profiles.values() if p["league"])
     print(f"  📜 {len(pool)} players, {len(heroes)} heroes "
           f"({league_players} players with league match history)")
+    n_books = sum(1 for b in league["books"].values() if b["games"])
+    if league["teams"]:
+        print(f"  🧭 Team Scout: {len(league['teams'])} teams, "
+              f"{n_books} with official draft history")
+    else:
+        print("  ⚠ No Team Scout / BBC teams loaded — bot falls back to "
+              "player comfort only")
     meta = load_meta(offline=offline)
     if meta["base"] or meta["adv"]:
         print(f"  📈 Patch meta: winrates for {len(meta['base'])} heroes, "
@@ -911,8 +1185,8 @@ def run_herodraft(season, port=None, offline=False, open_browser=True):
         print("  ⚠ No patch meta cached (offline, never fetched) — ratings "
               "fall back to roster comfort only")
 
-    state = DraftState(season, label, pool, profiles, heroes, meta)
-    page = render_page(pool, heroes, label).encode("utf-8")
+    state = DraftState(season, label, pool, profiles, heroes, meta, league)
+    page = render_page(pool, heroes, label, league["teams"]).encode("utf-8")
 
     try:
         server = _DraftServer(("127.0.0.1", port), _make_handler(state, page))
@@ -927,7 +1201,7 @@ def run_herodraft(season, port=None, offline=False, open_browser=True):
     url = f"http://localhost:{port}/"
     print("\n" + "=" * 60)
     print("  ⚔ HERO DRAFT PRACTICE — Captains Mode vs the bot (patch 7.40 order)")
-    print(f"  Pool: {label} | Build both rosters, flip for first pick, draft.")
+    print(f"  Pool: {label} | Pick Team Scout sides, flip for first pick, draft.")
     print(f"  Board: {url}")
     print("  Ctrl+C to stop")
     print("=" * 60 + "\n")
