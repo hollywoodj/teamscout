@@ -77,6 +77,14 @@ def test_ward_points_read_xy_and_key_fallback():
     assert _ward_points(None) == []
 
 
+def test_ward_points_carries_time_when_present():
+    assert _ward_points([
+        {"x": 133.1, "y": 101.6, "time": -58},
+        {"x": 140.0, "y": 120.0, "time": 300},
+        {"key": "[163, 99]"},  # no time key -> stays [x, y]
+    ]) == [[133.1, 101.6, -58], [140.0, 120.0, 300], [163.0, 99.0]]
+
+
 def test_compact_match_reads_nested_ward_purchases():
     patches = normalize_patches([
         {"id": 60, "name": "7.41", "date": "2026-03-24T00:00:00Z"},

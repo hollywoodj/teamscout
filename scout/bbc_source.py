@@ -91,7 +91,11 @@ _WARD_KEY_RE = re.compile(r"\[(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\]")
 
 
 def _ward_points(log):
-    """Compact [x, y] placements from an OpenDota obs_log / sen_log."""
+    """Compact [x, y] or [x, y, t] placements from an OpenDota obs_log /
+    sen_log. The third element, when present, is the log entry's integer
+    `time` in seconds on the game clock (negative = pre-horn); it is left
+    off when the entry has no time. Existing consumers only ever index
+    [0]/[1], so the extra element is additive."""
     out = []
     if not isinstance(log, list):
         return out
@@ -105,9 +109,16 @@ def _ward_points(log):
                 continue
             x, y = float(match.group(1)), float(match.group(2))
         try:
-            out.append([round(float(x), 1), round(float(y), 1)])
+            point = [round(float(x), 1), round(float(y), 1)]
         except (TypeError, ValueError):
             continue
+        t = entry.get("time")
+        if t is not None:
+            try:
+                point.append(int(t))
+            except (TypeError, ValueError):
+                pass
+        out.append(point)
     return out
 
 

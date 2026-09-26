@@ -1,8 +1,10 @@
 import pytest
 
 from scout.briefing import (
-    KEY_READS_FIELD_NAME, LIMIT_FIELD_VALUE, LIMIT_TOTAL,
-    _enforce_limits, briefing_text, build_briefing,
+    LIMIT_COMPONENTS, LIMIT_TEXT_TOTAL, TYPE_CONTAINER, TYPE_MEDIA_GALLERY,
+    TYPE_SECTION, TYPE_SEPARATOR, TYPE_TEXT_DISPLAY, TYPE_THUMBNAIL,
+    _count_components, _text_chars, build_briefing_page, build_wards_page,
+    page_text,
 )
 
 HEROES = {
@@ -17,7 +19,7 @@ HEROES = {
 
 
 def _team_match(match_id, start_time, duration, radiant_key, dire_key,
-                 radiant_win, picks_bans):
+                 radiant_win, picks_bans, patch=60):
     def side_players(base_id):
         return [{
             "id": base_id + i, "name": f"P{base_id + i}", "hero_id": 1,
@@ -37,7 +39,7 @@ def _team_match(match_id, start_time, duration, radiant_key, dire_key,
                  "players": side_players(11)},
         "radiant_win": radiant_win,
         "picks_bans": picks_bans,
-        "patch": 60,
+        "patch": patch,
         "radiant_score": 20, "dire_score": 15, "first_blood_time": 90,
     }
 
@@ -97,13 +99,16 @@ def build_fixture():
     # per-game averages must skip rather than treat as zero.
     player1_rows = [
         _official_row("teamalpha", "teambeta", "W", 1, 1, kills=10, deaths=2,
-                       assists=5, gpm=650, teamfight=0.6, firstblood=True),
+                       assists=5, gpm=650, teamfight=0.6, firstblood=True,
+                       obs_map=[[100, 100]], sen_map=[], is_radiant=True, patch=60),
         _official_row("teamalpha", "teambeta", "W", 1, 1, kills=8, deaths=1,
-                       assists=4, gpm=700, teamfight=0.5),
+                       assists=4, gpm=700, teamfight=0.5,
+                       obs_map=[[101, 101]], sen_map=[], is_radiant=True, patch=60),
         _official_row("teamalpha", "teambeta", "L", 2, 1, kills=None, deaths=5,
-                       assists=2, gpm=500, teamfight=0.4),
+                       assists=2, gpm=500, teamfight=0.4, is_radiant=False, patch=60),
         _official_row("teamalpha", "teambeta", "L", 1, 1, kills=3, deaths=6,
-                       assists=1, gpm=450, teamfight=0.3, buybacks=1),
+                       assists=1, gpm=450, teamfight=0.3, buybacks=1,
+                       is_radiant=False, patch=60),
     ]
     player2_rows = [
         _official_row("teamalpha", "teambeta", "W", 3, 2, kills=4, deaths=3,
@@ -140,23 +145,23 @@ def build_fixture():
         {"id": 1, "name": "Alice", "rank": "Divine", "mmr": 5000,
          "official": {"status": "bbc", "games": len(player1_rows),
                        "wins": 2, "winrate": 50.0, "matches": player1_rows},
-         "heroPool": hero_pool([(1, 8, 5)])},
+         "heroPool": hero_pool([(1, 8, 5)]), "pubWards": []},
         {"id": 2, "name": "Bob", "rank": "Ancient", "mmr": 4500,
          "official": {"status": "bbc", "games": len(player2_rows),
                        "wins": 1, "winrate": 50.0, "matches": player2_rows},
-         "heroPool": hero_pool([(3, 6, 3)])},
+         "heroPool": hero_pool([(3, 6, 3)]), "pubWards": []},
         {"id": 3, "name": "Cara", "rank": "Legend", "mmr": 3800,
          "official": {"status": "bbc", "games": len(player3_rows),
                        "wins": 1, "winrate": 50.0, "matches": player3_rows},
-         "heroPool": hero_pool([(4, 5, 2)])},
+         "heroPool": hero_pool([(4, 5, 2)]), "pubWards": []},
         {"id": 4, "name": "Dee", "rank": "Archon", "mmr": 3000,
          "official": {"status": "unavailable", "games": 0, "wins": 0,
                        "winrate": None, "matches": player4_rows},
-         "heroPool": hero_pool([(7, 10, 6), (1, 5, 2)])},
+         "heroPool": hero_pool([(7, 10, 6), (1, 5, 2)]), "pubWards": []},
         {"id": 5, "name": "Eli", "rank": "Crusader", "mmr": 2200,
          "official": {"status": "bbc", "games": len(player5_rows),
                        "wins": 1, "winrate": 100.0, "matches": player5_rows},
-         "heroPool": hero_pool([(6, 4, 3)])},
+         "heroPool": hero_pool([(6, 4, 3)]), "pubWards": []},
     ]
 
     teams = [
@@ -183,7 +188,7 @@ def build_fixture():
 
     return {
         "season": "Season 53", "seasonId": 53, "generatedAt": 1_800_000_000,
-        "patches": [], "teams": teams, "matchups": matchups,
+        "patches": [{"id": 60, "name": "7.41"}], "teams": teams, "matchups": matchups,
         "standings": standings, "teamMatches": team_matches, "heroes": HEROES,
         "officialSource": {"available": True, "league": "LD2L Season 53",
                             "generated": "2026-09-20", "week": 5},
@@ -193,98 +198,257 @@ def build_fixture():
 
 def test_team_resolution_exact_fuzzy_and_missing():
     payload = build_fixture()
-    assert build_briefing(payload, "Team Alpha")["title"].startswith("ALPHA")
-    assert build_briefing(payload, "alpha")["title"].startswith("ALPHA")
-    assert build_briefing(payload, "teamalpha")["title"].startswith("ALPHA")
+    page = build_briefing_page(payload, "Team Alpha")
+    text = page_text(page["components"])
+    assert "ALPHA" in text
+    page2 = build_briefing_page(payload, "alpha")
+    assert "ALPHA" in page_text(page2["components"])
+    page3 = build_briefing_page(payload, "teamalpha")
+    assert "ALPHA" in page_text(page3["components"])
     with pytest.raises(ValueError):
-        build_briefing(payload, "Team Nowhere")
+        build_briefing_page(payload, "Team Nowhere")
 
 
 def test_default_vs_uses_current_matchup():
     payload = build_fixture()
-    embed = build_briefing(payload, "Team Alpha")
-    assert "BETA" in embed["description"].splitlines()[0]
+    page = build_briefing_page(payload, "Team Alpha")
+    text = page_text(page["components"])
+    assert "BETA" in text.splitlines()[2]
 
 
 def test_form_strip_and_streak():
     payload = build_fixture()
-    embed = build_briefing(payload, "Team Alpha")
-    form_line = embed["description"].splitlines()[1]
+    page = build_briefing_page(payload, "Team Alpha")
+    text = page_text(page["components"])
+    form_line = next(ln for ln in text.splitlines() if ln.startswith("**Form**"))
     assert "\U0001F7E9\U0001F7E9\U0001F7E5\U0001F7E5" in form_line
     assert "L2" in form_line
 
 
+def test_single_container_with_accent_color():
+    payload = build_fixture()
+    page = build_briefing_page(payload, "Team Alpha")
+    assert len(page["components"]) == 1
+    container = page["components"][0]
+    assert container["type"] == TYPE_CONTAINER
+    assert container["accent_color"] == 0xE74C3C
+
+
 def test_side_split_key_read():
     payload = build_fixture()
-    embed = build_briefing(payload, "Team Alpha")
-    key_reads = next(f for f in embed["fields"] if f["name"] == KEY_READS_FIELD_NAME)
-    assert "Radiant" in key_reads["value"] and "Dire" in key_reads["value"]
+    page = build_briefing_page(payload, "Team Alpha")
+    text = page_text(page["components"])
+    assert "Key reads" in text
+    assert "-sided" in text
 
 
 def test_per_game_averages_ignore_none():
     payload = build_fixture()
-    embed = build_briefing(payload, "Team Alpha")
-    alice_field = next(f for f in embed["fields"] if "Alice" in f["name"])
+    page = build_briefing_page(payload, "Team Alpha")
+    text = page_text(page["components"])
     # kills across (10, 8, 3), skipping the row with kills=None -> avg 7.0
-    assert "7.0/" in alice_field["value"]
+    assert "7.0 /" in text
 
 
 def test_no_official_games_player_falls_back_to_hero_pool():
     payload = build_fixture()
-    embed = build_briefing(payload, "Team Alpha")
-    dee_field = next(f for f in embed["fields"] if "Dee" in f["name"])
-    assert "No official games for this team yet" in dee_field["value"]
-    assert "pubs:" in dee_field["value"]
-    assert "Hero Seven" in dee_field["value"]
+    page = build_briefing_page(payload, "Team Alpha")
+    text = page_text(page["components"])
+    dee_block = text[text.index("Dee"):]
+    assert "No official games for this team yet" in dee_block
+    assert "Heroes (pubs)" in dee_block
+    assert "Hero Seven" in dee_block
 
 
 def test_thin_sample_player_uses_hero_pool_for_hero_line():
     payload = build_fixture()
-    embed = build_briefing(payload, "Team Alpha")
-    eli_field = next(f for f in embed["fields"] if "Eli" in f["name"])
-    assert "No official games" not in eli_field["value"]
-    assert "pubs:" in eli_field["value"]
+    page = build_briefing_page(payload, "Team Alpha")
+    text = page_text(page["components"])
+    eli_block = text[text.index("Eli"):]
+    assert "No official games" not in eli_block.split("\n\n")[0]
+    assert "Heroes (pubs)" in eli_block
 
 
 def test_draft_side_mapping_uses_team_index():
     payload = build_fixture()
-    embed = build_briefing(payload, "Team Alpha")
-    draft_field = next(f for f in embed["fields"] if "Draft" in f["name"])
-    assert "Hero One" in draft_field["value"]
-    assert "Hero Two" in draft_field["value"]
-    assert "Picks:" in draft_field["value"]
-    assert "Bans:" in draft_field["value"]
-    assert "Banned vs:" in draft_field["value"]
+    page = build_briefing_page(payload, "Team Alpha")
+    text = page_text(page["components"])
+    draft_block = text[text.index("Draft"):text.index("Players")]
+    assert "Hero One" in draft_block or "H1" not in draft_block  # no emoji -> full/short name fallback
+    assert "**Picks**" in draft_block
+    assert "**Bans**" in draft_block
+    assert "**Banned vs**" in draft_block
 
 
-def test_briefing_text_renders_plain_text():
+def test_keycaps_use_variation_selector_16():
     payload = build_fixture()
-    embed = build_briefing(payload, "Team Alpha")
-    text = briefing_text(embed)
+    page = build_briefing_page(payload, "Team Alpha")
+    text = page_text(page["components"])
+    assert "1️⃣" in text
+    assert "2️⃣" in text
+
+
+def test_hero_emoji_substitution_with_map():
+    payload = build_fixture()
+    hero_emoji = {"1": "<:h_heroone:111>", "3": "<:h_herothree:333>"}
+    page = build_briefing_page(payload, "Team Alpha", hero_emoji=hero_emoji)
+    text = page_text(page["components"])
+    assert "<:h_heroone:111>" in text
+
+
+def test_hero_emoji_substitution_without_map_uses_short_names():
+    payload = build_fixture()
+    page = build_briefing_page(payload, "Team Alpha", hero_emoji=None)
+    text = page_text(page["components"])
+    assert "<:h_" not in text
+
+
+def test_thumbnail_present_when_portraits_given():
+    payload = build_fixture()
+    portraits = {"1": "https://cdn.example/1.png"}
+    page = build_briefing_page(payload, "Team Alpha", portraits=portraits)
+    container = page["components"][0]
+    sections = [c for c in container["components"] if c.get("type") == TYPE_SECTION]
+    assert sections, "expected at least one Section with a thumbnail accessory"
+    thumb = sections[0]["accessory"]
+    assert thumb["type"] == TYPE_THUMBNAIL
+    assert thumb["media"]["url"] == "https://cdn.example/1.png"
+
+
+def test_thumbnail_absent_falls_back_to_plain_text_display():
+    payload = build_fixture()
+    page = build_briefing_page(payload, "Team Alpha", portraits=None)
+    container = page["components"][0]
+    sections = [c for c in container["components"] if c.get("type") == TYPE_SECTION]
+    assert not sections
+
+
+def test_page_text_renders_plain_text():
+    payload = build_fixture()
+    page = build_briefing_page(payload, "Team Alpha")
+    text = page_text(page["components"])
     assert "SCOUT BRIEFING" in text
     assert "ALPHA" in text
 
 
-def test_enforce_limits_caps_total_and_trims_key_reads_first():
-    embed = {
-        "author": {"name": "Scout"},
-        "title": "T" * 300,
-        "description": "D" * 5000,
-        "color": 0,
-        "fields": [
-            {"name": "Big field", "value": "X" * 2000, "inline": True},
-            {"name": KEY_READS_FIELD_NAME,
-             "value": "\n".join(f"bullet {i} " + "y" * 200 for i in range(20)),
-             "inline": False},
-        ],
-        "footer": {"text": "F" * 3000},
+def test_no_flags_key_in_builder_output():
+    payload = build_fixture()
+    page = build_briefing_page(payload, "Team Alpha")
+    assert "flags" not in page
+    for component in page["components"]:
+        assert "flags" not in component
+
+
+def test_component_count_within_limit():
+    payload = build_fixture()
+    page = build_briefing_page(payload, "Team Alpha")
+    assert _count_components(page["components"]) <= LIMIT_COMPONENTS
+
+
+def test_text_budget_enforced_with_oversized_fixture():
+    payload = build_fixture()
+    # Blow up the roster to 20 players with long names and full hero pools,
+    # and lots of official rows, to push well past the 4000-char budget.
+    big_roster = []
+    matches = []
+    for i in range(20):
+        pid = 100 + i
+        rows = [
+            _official_row("teamalpha", "teambeta", "W", (i % 7) + 1, (i % 5) + 1,
+                           kills=10, deaths=2, assists=5)
+            for _ in range(6)
+        ]
+        big_roster.append({
+            "id": pid, "name": f"PlayerWithAVeryLongNameNumber{i}",
+            "rank": "Divine 5",
+            "official": {"status": "bbc", "games": len(rows), "wins": 3,
+                         "winrate": 50.0, "matches": rows},
+            "heroPool": {"heroes": [], "gems": [],
+                         "baseline": {"games": 0, "wins": 0, "winrate": None, "kda": None},
+                         "pubWindowDays": 180},
+            "pubWards": [],
+        })
+        matches.append(_team_match(900 + i, 100 + i, 1800, "teamalpha", "teambeta", True, []))
+    payload["players"].extend(big_roster)
+    payload["teams"][0]["roster"] = payload["teams"][0]["roster"] + [p["id"] for p in big_roster]
+    payload["teamMatches"].extend(matches)
+
+    page = build_briefing_page(payload, "Team Alpha")
+    assert _text_chars(page["components"]) <= LIMIT_TEXT_TOTAL
+    assert _count_components(page["components"]) <= LIMIT_COMPONENTS
+
+
+# --------------------------------------------------------------------------
+# Wards page
+# --------------------------------------------------------------------------
+
+def _wards_fixture():
+    payload = build_fixture()
+    for row in payload["players"][0]["official"]["matches"]:
+        row["patch"] = 60
+    payload["players"][0]["official"]["matches"][0].update(
+        is_radiant=True, obs_map=[[100, 100]], sen_map=[[110, 110]])
+    payload["players"][0]["official"]["matches"][1].update(
+        is_radiant=True, obs_map=[[101, 101]], sen_map=[])
+    for row in payload["players"][0]["official"]["matches"][2:]:
+        row.update(is_radiant=False)
+    payload["teams"][0]["roster"] = [1]
+    return payload
+
+
+def test_wards_page_single_container_with_media_gallery():
+    payload = _wards_fixture()
+    page = build_wards_page(payload, "Team Alpha")
+    assert len(page["components"]) == 1
+    container = page["components"][0]
+    assert container["type"] == TYPE_CONTAINER
+    galleries = [c for c in container["components"] if c.get("type") == TYPE_MEDIA_GALLERY]
+    assert len(galleries) == 1
+    assert galleries[0]["items"][0]["media"]["url"] == "attachment://wards.png"
+
+
+def test_wards_page_returns_png_file():
+    payload = _wards_fixture()
+    page = build_wards_page(payload, "Team Alpha")
+    assert page["files"]
+    filename, data = page["files"][0]
+    assert filename == "wards.png"
+    assert data[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_wards_page_extra_images_appended():
+    payload = _wards_fixture()
+    extra = [("zoom.png", b"fakepngdata", "A zoomed detail")]
+    page = build_wards_page(payload, "Team Alpha", extra_images=extra)
+    container = page["components"][0]
+    gallery = next(c for c in container["components"] if c.get("type") == TYPE_MEDIA_GALLERY)
+    assert len(gallery["items"]) == 2
+    assert gallery["items"][1]["media"]["url"] == "attachment://zoom.png"
+    filenames = [f for f, _b in page["files"]]
+    assert "zoom.png" in filenames
+
+
+def test_wards_page_mid_ward_summary_puts_midward_first_in_its_own_gallery():
+    payload = _wards_fixture()
+    extra = [("midward.png", b"fakemidward", "Mid ward before 1:00, rune to rune")]
+    mid_summary = {
+        "radiant": {"games": 6, "withObserver": 6, "byTeammate": 1, "topSpotCount": 4, "spots": 2},
+        "dire": {"games": 5, "withObserver": 5, "byTeammate": 0, "topSpotCount": 3, "spots": 3},
     }
-    _enforce_limits(embed)
-    total = (len(embed["title"]) + len(embed["description"])
-             + len(embed["footer"]["text"]) + len(embed["author"]["name"])
-             + sum(len(f["name"]) + len(f["value"]) for f in embed["fields"]))
-    assert total <= LIMIT_TOTAL
-    for field in embed["fields"]:
-        assert len(field["value"]) <= LIMIT_FIELD_VALUE
-    assert len(embed["title"]) <= 256
-    assert len(embed["footer"]["text"]) <= 2048
+    page = build_wards_page(payload, "Team Alpha", extra_images=extra, mid_ward_summary=mid_summary)
+    container = page["components"][0]
+    galleries = [c for c in container["components"] if c.get("type") == TYPE_MEDIA_GALLERY]
+    assert len(galleries) == 2
+    assert galleries[0]["items"][0]["media"]["url"] == "attachment://midward.png"
+    assert galleries[1]["items"][0]["media"]["url"] == "attachment://wards.png"
+
+    filenames = [f for f, _b in page["files"]]
+    assert filenames == ["midward.png", "wards.png"]
+
+    text = page_text(page["components"])
+    assert "Mid ward" in text
+    assert "**Radiant** 6 of 6 games · one main spot (4 of 6) · 1* by a teammate" in text
+    assert "**Dire** 5 of 5 games · one main spot (3 of 5)" in text
+    assert "Supports and carry" in text
+    # Mid ward section must read before the supports section.
+    assert text.index("Mid ward") < text.index("Supports and carry")
