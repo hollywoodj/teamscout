@@ -132,6 +132,30 @@ The always-on process also watches BBC's `feed.json` and match cache. When a new
 
 Manual `python ld2l_scout.py --teamscout` still opens a browser; the always-on task uses `--no-browser`.
 
+## Scout Bot
+
+Scout Bot is a Discord bot that posts the Briefing and Wards pages (the same
+Components V2 pages Team Scout renders) into the team's `#test` channel. It
+reads BBC's feed and official-match cache read-only, and only shells out to
+`python -m scout.briefing_cli` (never an in-process import) to build a
+briefing snapshot.
+
+```powershell
+python scout_bot.py                                    # gateway: slash commands (/week, /standings, /matchups, /roster, /recent, /briefing)
+python scout_bot.py --post-briefing "Team Name" --vs "Other Team"   # one-shot post
+python scout_bot.py --post-briefing "Team Name" --dry-run           # print both pages instead of posting
+python scout_bot.py --sync-hero-emojis                              # (re)sync OpenDota hero art as Discord application emojis
+```
+
+It runs always-on via the `Scout Bot` Windows Scheduled Task, installed with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File services\install_scout_bot_task.ps1
+```
+
+Secrets (`SCOUT_BOT_TOKEN`, `SCOUT_BOT_APPLICATION_ID`, `SCOUT_BOT_GUILD_ID`,
+`SCOUT_BOT_CHANNEL_ID`) live in the git-ignored `.env` at the repo root.
+
 ## Sharing it with the team
 
 Team Scout is published to the internet through a Tailscale Funnel on the

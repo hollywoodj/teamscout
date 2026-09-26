@@ -1,4 +1,5 @@
 .venv/
+.env
 *.xlsx
 *.html
 scout_reports/

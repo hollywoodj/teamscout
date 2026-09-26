@@ -1,5 +1,8 @@
 requests
 openpyxl
+# For scout_bot.py (the Discord bot)
+discord.py==2.7.1
+python-dotenv
 # Optional, for --live mode's "on the block" banner (the site runs socket.io v2,
 # which needs the 4.x python client). Without these, --live still auto-marks
 # completed picks via polling — you just don't see nominations/bids.
