@@ -22,6 +22,7 @@ import json
 import math
 import os
 import random
+import re
 import threading
 import time
 import webbrowser
@@ -1093,6 +1094,33 @@ def _engine_loop(state, stop):
         stop.wait(0.25)
 
 
+SOUND_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+SOUND_EXTS = {".mp3": "audio/mpeg", ".ogg": "audio/ogg",
+              ".wav": "audio/wav", ".webm": "audio/webm"}
+SOUNDS_DIR = os.path.join(os.path.dirname(__file__), "assets", "sounds")
+
+
+def _resolve_sound_path(filename):
+    """Plain filename, allowed extension, no path traversal -> abs path or None.
+
+    Optional real-audio override for the herodraft board: if the user drops
+    their own exported Dota sounds into scout/assets/sounds/, GET/HEAD
+    /sounds/<filename> serves them; anything else (or a missing file) 404s.
+    """
+    if not filename or ".." in filename or not SOUND_NAME_RE.match(filename):
+        return None
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in SOUND_EXTS:
+        return None
+    path = os.path.abspath(os.path.join(SOUNDS_DIR, filename))
+    sounds_dir_abs = os.path.abspath(SOUNDS_DIR)
+    if os.path.commonpath([path, sounds_dir_abs]) != sounds_dir_abs:
+        return None
+    if not os.path.isfile(path):
+        return None
+    return path, SOUND_EXTS[ext]
+
+
 def _make_handler(state, page_bytes):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):
@@ -1117,14 +1145,39 @@ def _make_handler(state, page_bytes):
             except (ValueError, json.JSONDecodeError):
                 return {}
 
+        def _serve_sound(self, filename, head=False):
+            resolved = _resolve_sound_path(filename)
+            if not resolved:
+                self._send(404, "text/plain", b"" if head else b"not found")
+                return
+            path, ctype = resolved
+            if head:
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(os.path.getsize(path)))
+                self.end_headers()
+                return
+            with open(path, "rb") as f:
+                self._send(200, ctype, f.read())
+
         def do_GET(self):
             path = self.path.split("?")[0]
             if path in ("/", "/index.html"):
                 self._send(200, "text/html; charset=utf-8", page_bytes)
             elif path == "/draft/state":
                 self._json(200, state.snapshot())
+            elif path.startswith("/sounds/"):
+                self._serve_sound(path[len("/sounds/"):])
             else:
                 self._send(404, "text/plain", b"not found")
+
+        def do_HEAD(self):
+            path = self.path.split("?")[0]
+            if path.startswith("/sounds/"):
+                self._serve_sound(path[len("/sounds/"):], head=True)
+            else:
+                self._send(404, "text/plain", b"")
 
         def do_POST(self):
             path = self.path.split("?")[0]

@@ -1,18 +1,21 @@
 """The --herodraft board page: a faithful Dota 2 Captains Mode draft UI.
 
-Laid out and skinned like the in-game CM screen: pick columns down the left
-(Radiant) and right (Dire) edges, each team's ban strip under its own banner,
-the phase clock centred between them, the 24-step draft sequence as a spine
-beneath, and the hero grid in the four attribute columns.
+Laid out and skinned like the real in-client CM screen: a top bar with both
+rosters' player-slot cards flanking a large clock and reserve boxes, a turn
+heading, the hero grid in the four attribute columns on the left, and on the
+right a vertical draft panel showing the real 24-step Captains Mode sequence
+with an action box underneath it for the current ban/pick.
 
-The palette, type and voice follow the client: cool blue-charcoal panels,
-Radiant olive / Dire brick, no gold and no serif. The tool's own intel — win
-probability, hero ratings, scouting hints — stays subordinate to the drill,
-demoted to the panel row under the board.
+The palette follows the client: blue-grey slate panels (not near-black),
+Radiant olive / Dire brick, no gold and no serif except a small captain
+crown. The tool's own intel - win probability, hero ratings, scouting hints
+- stays subordinate to the drill, tucked into an opt-in hints drawer.
 
 Self-contained page served by herodraft.py; polls /draft/state and posts
 actions back. Hero portraits come from the Steam CDN (graceful text fallback
-when offline).
+when offline). Sound is synthesized with the Web Audio API by default, with
+an optional override: drop the user's own exported Dota 2 sounds into
+scout/assets/sounds/ (see the README there) and the page will use them.
 """
 
 import html
@@ -26,20 +29,35 @@ PAGE = r"""<!DOCTYPE html>
 <title>Captains Mode — LD2L</title>
 <style>
 :root{
-  /* surfaces — cool blue-charcoal, the client's greys (no purple cast) */
-  --void:#0B0E12; --panel:#171C23; --panel-lit:#1F262F;
-  --rule:#2C353F; --rule-hi:#3C4854;
+  /* background — the client's blue-grey slate, not near-black */
+  --bg-top:#3A4754; --bg-edge:#1C242C;
+  --void:#12171D; --panel:#1B222B; --panel-lit:#242F3A;
+  --slab: rgba(22,27,33,.85);
+  --rule:#33404C; --rule-hi:#4A5B6B;
   /* text — cool, not warm */
-  --ink:#C7CDD4; --ink-hi:#E8EDF2; --ink-dim:#7C8794;
+  --ink:#D6DDE3; --ink-hi:#F1F5F8; --ink-dim:#8C99A6;
   /* factions — Valve's actual values */
   --radiant:#92A525; --dire:#C23C2A;
   /* affordances */
   --go:#6B9A22; --go-hi:#84B92C; --good:#9BBF4A; --bad:#D65B45;
+  --reserve-fill:#3B5068;
   --ui:"Segoe UI","Noto Sans",-apple-system,system-ui,Arial,sans-serif;
-  --tile:clamp(34px, 2.9vw, 52px);
+  /* tile scales with whichever dimension is tighter, so the four attribute
+     groups (six rows each) always fit the leftover height without a page
+     scroll, but never outgrow the available width either. Sized off the
+     grid panel's own (container-query) width, not the viewport's, so it
+     shrinks correctly when the hints drawer or draft panel take width. */
+  --tile:clamp(26px, min(calc(4.5cqw - 4px), 9vh), 84px);
+  /* Dota's real player-slot colours, roster order */
+  --slotr1:#3375FF; --slotr2:#66FFBF; --slotr3:#BF00BF; --slotr4:#F3F00B; --slotr5:#FF6B00;
+  --slotd1:#FE86C2; --slotd2:#A1B447; --slotd3:#65D9F7; --slotd4:#008321; --slotd5:#A46900;
 }
 *{box-sizing:border-box; margin:0; padding:0}
-body{background:var(--void); color:var(--ink);
+body{
+  background:
+    radial-gradient(ellipse 1300px 820px at 50% -6%, var(--bg-top) 0%, transparent 62%),
+    linear-gradient(180deg, var(--bg-top) 0%, var(--bg-edge) 68%);
+  color:var(--ink);
   font:400 13px/1.45 var(--ui); font-variant-numeric:tabular-nums;
   min-height:100vh; padding:10px 14px}
 h1{font-size:15px; font-weight:600; letter-spacing:.22em; text-transform:uppercase;
@@ -61,10 +79,12 @@ input[type=text],select{background:#0E1218; border:1px solid var(--rule); color:
   padding:6px 9px; font:400 12.5px var(--ui); width:100%; border-radius:2px}
 input[type=text]::placeholder{color:#5D6874}
 select{margin-bottom:6px}
-.wrap{max-width:1720px; margin:0 auto}
+.wrap{max-width:1720px; margin:0 auto; position:relative}
+.vignette{position:fixed; inset:0; pointer-events:none; z-index:1;
+  box-shadow:inset 0 0 220px 70px rgba(0,0,0,.55)}
 
 /* ================= setup ================= */
-.setup{display:none; max-width:1060px; margin:0 auto}
+.setup{display:none; max-width:1060px; margin:0 auto; position:relative; z-index:2}
 .setup.on{display:block}
 .teamcols{display:flex; gap:20px; margin-top:8px}
 .tcol{flex:1; background:var(--panel); border:1px solid var(--rule); padding:14px;
@@ -97,117 +117,90 @@ select{margin-bottom:6px}
 .warn{text-align:center; color:var(--bad); font-size:11.5px; min-height:16px; margin-top:9px}
 
 /* ================= board ================= */
-.board{display:none}
-.board.on{display:block}
-/* --- top bar: team banner + own ban strip, clock centred --- */
-.topbar{display:grid; grid-template-columns:1fr 320px 1fr; gap:10px; align-items:stretch}
-.tbox{background:var(--panel); border:1px solid var(--rule); border-radius:2px;
-  padding:8px 13px; display:flex; flex-direction:column; justify-content:space-between;
-  gap:8px}
-.tline{display:flex; justify-content:space-between; align-items:center; gap:12px}
-.tbox.right .tline{flex-direction:row-reverse}
-.tbox .nm{display:inline-flex; align-items:center; gap:8px; font-size:14px;
-  font-weight:600; letter-spacing:.1em; text-transform:uppercase}
-.tbox.right .nm{flex-direction:row-reverse}
-.tbox .nm::before{content:''; width:9px; height:9px; transform:rotate(45deg); flex:0 0 auto}
-.tbox.radiant{border-bottom:2px solid var(--radiant)}
-.tbox.radiant .nm{color:var(--radiant)} .tbox.radiant .nm::before{background:var(--radiant)}
-.tbox.dire{border-bottom:2px solid var(--dire)}
-.tbox.dire .nm{color:var(--dire)} .tbox.dire .nm::before{background:var(--dire)}
-.tmeta{display:flex; align-items:center; gap:14px}
-.tbox.right .tmeta{flex-direction:row-reverse}
-.tbox .fp{font-size:9.5px; color:var(--ink-dim); letter-spacing:.14em; text-transform:uppercase}
-.reserve{font-size:10.5px; color:var(--ink-dim); letter-spacing:.08em; text-transform:uppercase}
-.reserve b{color:var(--ink); font-weight:600}
-.reserve.low b{color:var(--bad)}
-/* ban strip lives under its own team, like the client */
-.banstrip{display:flex; gap:3px}
-.tbox.right .banstrip{justify-content:flex-end}
-.banstrip .b{width:42px; height:24px; border:1px solid var(--rule); border-radius:1px;
-  overflow:hidden; position:relative; background:#0E1218}
-.banstrip .b img{width:100%; height:100%; object-fit:cover; filter:grayscale(1) brightness(.5)}
-.banstrip .b.used{border-color:#4A2620}
-.banstrip .b.used::after{content:''; position:absolute; inset:0; background:
-  linear-gradient(45deg,transparent 46%,rgba(194,60,42,.92) 48%,rgba(194,60,42,.92) 52%,transparent 54%)}
-/* --- clock --- */
-.tcenter{text-align:center; display:flex; flex-direction:column; justify-content:center}
-.turnlabel{font-size:10px; letter-spacing:.18em; text-transform:uppercase; color:var(--ink-dim)}
-.clock{font:300 40px/1 var(--ui); font-variant-numeric:tabular-nums; color:var(--ink-hi);
-  letter-spacing:.02em}
+.board{display:none; position:relative; z-index:2}
+.board.on{display:flex; flex-direction:column; gap:6px; height:calc(100vh - 20px);
+  min-height:0; overflow:hidden}
+body.drafting h1, body.drafting .sub{display:none}
+
+/* --- top bar: icons, rosters, clock, reserve, turn heading --- */
+.topbar{flex:0 0 auto; position:relative; padding-top:2px}
+.topicons{position:absolute; top:0; left:0; display:flex; align-items:center; gap:4px;
+  z-index:3}
+.iconbtn{background:transparent; border:1px solid transparent; color:var(--ink-dim);
+  font-size:15px; line-height:1; padding:6px 8px; border-radius:2px; letter-spacing:0;
+  text-transform:none; font-weight:400}
+.iconbtn:hover{color:var(--ink-hi); border-color:var(--rule)}
+.iconbtn.leave{font-size:10px; letter-spacing:.1em; text-transform:uppercase;
+  font-weight:600; margin-left:4px}
+.volslider{width:64px; accent-color:var(--ink-dim); vertical-align:middle}
+.rosterrow{display:flex; align-items:flex-end; justify-content:center; gap:4vw;
+  padding-top:2px}
+.teamcards{display:flex; gap:.6vw}
+.pcard{width:clamp(46px, 5.4vw, 78px); display:flex; flex-direction:column;
+  align-items:center; gap:3px; position:relative}
+.cardbody{width:100%; height:clamp(26px,3.4vw,40px);
+  background:linear-gradient(180deg,#28323C,#151B22);
+  clip-path:polygon(14% 0,100% 0,86% 100%,0% 100%);
+  border-bottom:4px solid var(--slot-color, var(--ink-dim))}
+.pname{font-size:clamp(8px,.72vw,10.5px); color:var(--ink-dim); text-align:center;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%}
+.crown{position:absolute; top:-10px; left:50%; transform:translateX(-50%);
+  font-size:12px; color:#E8C24A; text-shadow:0 1px 2px rgba(0,0,0,.6)}
+.clockblock{display:flex; align-items:center; gap:clamp(8px,1.4vw,20px); padding:0 6px}
+.reservebox{display:flex; flex-direction:column; align-items:center; gap:3px}
+.rlabel{background:var(--reserve-fill); color:#CFE0F0; font:700 8px var(--ui);
+  letter-spacing:.14em; text-transform:uppercase; padding:2px 9px; border-radius:1px}
+.rtime{font:600 13px var(--ui); font-variant-numeric:tabular-nums; color:var(--ink)}
+.rtime.hot{color:var(--bad)}
+.clockcol{display:flex; flex-direction:column; align-items:center; min-width:92px}
+.clock{font:300 clamp(34px,4.6vw,72px)/1 var(--ui); color:var(--ink-hi);
+  font-variant-numeric:tabular-nums}
 .clock.reserve{color:var(--bad)}
-.clockbar{width:82%; height:3px; background:#0E1218; overflow:hidden; margin:5px auto 3px}
-.clockbar i{display:block; height:100%; background:var(--ink-dim); transition:width .25s linear}
-.clockbar i.reserve{background:var(--dire)}
-.turnwho{font-size:12.5px; font-weight:600; letter-spacing:.14em; text-transform:uppercase;
-  color:var(--ink-hi)}
-.turnwho.enemyturn{color:var(--ink-dim)}
+.cmlabel{font:700 10.5px var(--ui); letter-spacing:.22em; text-transform:uppercase;
+  color:var(--ink-dim); margin-top:2px}
+.turnheading{text-align:center; font:300 clamp(15px,2vw,29px)/1.3 var(--ui);
+  letter-spacing:.1em; text-transform:uppercase; color:var(--ink-hi); margin-top:4px}
+.turnheading.enemyturn{color:var(--ink-dim)}
 
-/* --- draft spine: the 24 steps, cut at real phase boundaries --- */
-.spine{display:flex; justify-content:center; gap:16px; margin:8px 0 9px;
-  padding:7px 0; border-top:1px solid var(--rule); border-bottom:1px solid var(--rule);
-  flex-wrap:wrap}
-.phase{display:flex; flex-direction:column; align-items:center; gap:4px}
-.phcap{font-size:8.5px; letter-spacing:.16em; color:#39424C; text-transform:uppercase;
-  transition:color .3s}
-.phase.curphase .phcap{color:var(--ink-hi)}
-.phrow{display:flex; gap:3px}
-.sq{width:21px; height:21px; border:1px solid var(--rule); background:#0E1218;
-  position:relative; overflow:hidden; border-radius:1px}
-.sq.pick{width:27px; height:27px}
-.sq.radiant{border-bottom:2px solid var(--radiant)}
-.sq.dire{border-bottom:2px solid var(--dire)}
-.sq.cur{border-color:var(--ink-hi); box-shadow:0 0 0 1px var(--ink-hi)}
-.sq img{width:100%; height:100%; object-fit:cover}
-.sq.banned img{filter:grayscale(1) brightness(.45)}
-.sq.banned::after{content:''; position:absolute; inset:0; background:
-  linear-gradient(45deg,transparent 44%,rgba(194,60,42,.88) 47%,rgba(194,60,42,.88) 53%,transparent 56%)}
-.sq.skipped::after{content:'—'; position:absolute; inset:0; color:var(--ink-dim);
-  display:flex; align-items:center; justify-content:center; font-size:11px}
-
-/* --- arena: pick columns flanking the hero grid --- */
-.arena{display:flex; gap:12px; align-items:flex-start}
-.pickcol{flex:0 0 180px; background:var(--panel); border:1px solid var(--rule);
-  border-radius:2px; padding:10px}
-.pickcol.radiant{border-left:2px solid var(--radiant)}
-.pickcol.dire{border-right:2px solid var(--dire)}
-.pickcol.active{border-color:var(--rule-hi)}
-.slots{display:flex; flex-direction:column; gap:7px}
-.pcard{position:relative; border:1px solid var(--rule); border-radius:1px;
-  overflow:hidden; background:#0E1218}
-.pcard .imwrap{width:100%; aspect-ratio:16/9; display:flex; align-items:center;
-  justify-content:center; overflow:hidden}
-.pcard img{width:100%; height:100%; object-fit:cover}
-.pcard .ph{color:#2A323B; font-size:22px}
-.pcard .cap{padding:3px 6px; font-size:10.5px; display:flex; justify-content:space-between;
-  gap:5px; background:var(--panel-lit)}
-.pcard .cap .h{color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
-.pcard .cap .pl{color:var(--ink-dim); white-space:nowrap}
-.pcard .rt{position:absolute; top:2px; right:2px; font:600 9.5px var(--ui);
-  background:rgba(6,9,13,.82); padding:1px 4px; border-radius:1px; letter-spacing:.02em}
-.rt.pos{color:var(--good)} .rt.neg{color:var(--bad)} .rt.mid{color:var(--ink-dim)}
-.pickcol .roster{font-size:10.5px; color:var(--ink-dim); line-height:1.6; margin-top:9px;
-  padding-top:8px; border-top:1px solid var(--rule)}
-.pickcol .roster b{color:var(--ink); font-weight:600}
-
-/* --- hero grid: four attribute groups, in-game column widths --- */
-.gridwrap{flex:1; background:var(--panel); border:1px solid var(--rule); border-radius:2px;
-  padding:8px 10px; min-width:0; overflow-x:auto}
-.gridtop{display:flex; justify-content:center; margin-bottom:8px}
+/* --- main row: hero grid + optional hints drawer + draft column --- */
+.mainrow{display:flex; gap:8px; flex:1; min-height:0}
+.gridwrap{flex:1; min-width:0; display:flex; flex-direction:column; min-height:0;
+  background:var(--panel); border:1px solid var(--rule); border-radius:2px;
+  padding:7px 9px; overflow-x:auto; container-type:inline-size}
+.gridtop{display:flex; align-items:center; justify-content:space-between; gap:10px;
+  margin-bottom:6px; flex:0 0 auto}
 .gridtop input{max-width:260px}
-.herogrid{display:flex; gap:12px; align-items:flex-start; justify-content:center;
-  min-width:max-content}
-.attrgroup{display:flex; flex-direction:column}
+.hintsbtn{font-size:10px; padding:6px 14px; flex:0 0 auto}
+.hintsbtn.on{background:linear-gradient(180deg,var(--panel-lit),var(--rule-hi));
+  color:var(--ink-hi); border-color:var(--ink-dim)}
+/* herogrid is sized to its content (sizeHeroGrid() sets an explicit pixel
+   height on it, computed from real measurements), NOT stretched with flex:1
+   — a stretched flex:1 row lets each attribute group's grid grow taller than
+   its tiles can (capped at 1.6x tile width), which leaves a visible gap
+   under every row. Sizing to content instead means any leftover vertical
+   room in .gridwrap collapses into a single gap below the whole grid. */
+.herogrid{flex:0 0 auto; display:flex; gap:12px; align-items:stretch;
+  justify-content:center}
+.attrgroup{display:flex; flex-direction:column; flex:0 0 auto; min-height:0}
 .attrhead{display:flex; align-items:center; gap:6px; margin-bottom:6px; padding-bottom:4px;
-  border-bottom:1px solid var(--rule)}
+  border-bottom:1px solid var(--rule); flex:0 0 auto}
 .attrhead .dot{width:8px; height:8px; transform:rotate(45deg)}
 .attrhead span{font-size:9.5px; letter-spacing:.16em; text-transform:uppercase;
   color:var(--ink-dim); font-weight:600}
-.grid{display:grid; gap:3px}   /* grid-template-columns set inline per attribute */
-.tile{width:var(--tile); cursor:pointer; position:relative}
-.tile .im{width:var(--tile); height:calc(var(--tile)*0.56); background:#0E1218;
+/* grid-template-columns/rows set inline per attribute (buildGrid): columns at
+   the client's widths, rows shared uniformly at the tallest group's row count
+   so every tile in every group gets the same height. minmax(0,1fr) rows
+   divide up #heroGrid's own JS-measured height (sizeHeroGrid()) exactly, so
+   there's no per-row slack for the image to fall short of. */
+.grid{display:grid; gap:3px; flex:1; min-height:0}
+.tile{width:var(--tile); height:100%; cursor:pointer; position:relative}
+.tile .im{width:100%; height:100%; background:#0E1218;
   border:1px solid var(--rule); border-radius:1px; overflow:hidden; display:flex;
-  align-items:center; justify-content:center}
-.tile .im img{width:100%; height:100%; object-fit:cover; display:block}
+  align-items:center; justify-content:center;
+  /* safety bounds only — sizeHeroGrid() already keeps rows within this range */
+  min-height:calc(var(--tile)*0.56); max-height:calc(var(--tile)*2.3)}
+.tile .im img{width:100%; height:100%; object-fit:cover; object-position:50% 30%;
+  display:block}
 .tile:hover .im{border-color:var(--ink-hi)}
 .tile.taken{pointer-events:none}
 .tile.taken .im img{filter:grayscale(1) brightness(.35)}
@@ -219,16 +212,14 @@ select{margin-bottom:6px}
 .tile .rb{position:absolute; top:1px; right:1px; font:600 8.5px var(--ui);
   background:rgba(6,9,13,.8); padding:0 3px; border-radius:1px; pointer-events:none}
 .rb.pos{color:var(--good)} .rb.neg{color:var(--bad)} .rb.mid{color:#5D6874}
-.lockrow{position:sticky; bottom:8px; text-align:center; margin-top:9px}
-.lockrow button{font-size:12px; padding:9px 38px}
-.lockrow .picking{color:var(--ink-dim); font-size:10.5px; letter-spacing:.14em;
-  text-transform:uppercase; margin-bottom:5px; min-height:14px}
 
-/* --- panel row: the tool's own intel, subordinate to the drill --- */
-.panels{display:flex; gap:12px; margin-top:12px; align-items:flex-start}
-.panelbox{flex:1; background:var(--panel); border:1px solid var(--rule); border-radius:2px;
-  padding:10px 12px}
-.panelbox.narrow{flex:0 0 300px}
+/* --- hints drawer: the tool's own intel, off by default, toggled on demand --- */
+.drawer{flex:0 0 300px; width:300px; min-width:0; background:var(--panel);
+  border:1px solid var(--rule); border-radius:2px; padding:10px 12px; display:none;
+  flex-direction:column; gap:0; min-height:0; overflow-y:auto}
+.drawer.on{display:flex}
+.panelbox{padding-bottom:10px; margin-bottom:10px; border-bottom:1px solid var(--rule)}
+.panelbox:last-child{border-bottom:0; margin-bottom:0; padding-bottom:0}
 .panelbox h3{font-size:9.5px; letter-spacing:.16em; text-transform:uppercase;
   color:var(--ink-dim); margin-bottom:8px; border-bottom:1px solid var(--rule);
   padding-bottom:5px; font-weight:600}
@@ -253,9 +244,87 @@ select{margin-bottom:6px}
 .sg .snm{font-size:12.5px; color:var(--ink)}
 .sg .swhy{font-size:10px; color:var(--ink-dim); line-height:1.4}
 .hintlite{color:var(--ink-dim); font-size:11.5px}
-.feed{max-height:290px; overflow-y:auto; font-size:11.5px; line-height:1.55}
-.feed div{padding:2px 0; border-bottom:1px solid #12171D}
-.feed .me{color:var(--radiant)} .feed .en{color:#D08074} .feed .sys{color:var(--ink-dim)}
+
+/* --- right column: the 24-step draft panel + the action box under it --- */
+.rightcol{flex:0 0 clamp(300px, 23vw, 400px); display:flex; flex-direction:column;
+  gap:6px; min-height:0}
+.draftpanel{flex:1; min-height:0; background:var(--slab); border:1px solid var(--rule);
+  border-radius:2px; display:flex; flex-direction:column; overflow:hidden}
+.dpheader{display:flex; flex:0 0 auto; border-bottom:1px solid var(--rule)}
+.dpcol{flex:1; text-align:center; padding:6px 0; font:700 10.5px var(--ui);
+  letter-spacing:.16em; text-transform:uppercase; color:var(--ink-dim);
+  transition:color .3s}
+.dpcol.radiant.active{color:var(--radiant)}
+.dpcol.dire.active{color:var(--dire)}
+.dpbody{flex:1; min-height:0; display:flex; flex-direction:column; position:relative;
+  transition:background .3s ease}
+.dpbody::before{content:''; position:absolute; left:50%; top:0; bottom:0; width:1px;
+  background:var(--rule); z-index:0}
+.dpbody.actradiant{background:linear-gradient(90deg, rgba(146,165,37,.22), transparent 58%)}
+.dpbody.actdire{background:linear-gradient(270deg, rgba(194,60,42,.22), transparent 58%)}
+/* Rows are packed two-steps-per-row where the sequence allows (see
+   buildVisualRows), so there are ~14 rows for 24 steps, not 24. Pick rows
+   get double the flex-grow of ban rows, so pick boxes end up roughly twice
+   the height of ban boxes — matching the reference — instead of every row
+   (and thus every box) being forced to the same size. */
+.dprow{display:grid; grid-template-columns:1fr 26px 1fr; align-items:stretch;
+  flex:1 1 0; min-height:0; position:relative; z-index:1}
+.dprow.pick{flex-grow:2}
+.dpslot{display:flex; align-items:center; min-height:0}
+.dpslot.left{justify-content:flex-end; padding-right:3px}
+.dpslot.right{justify-content:flex-start; padding-left:3px}
+.dpnumcol{display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px}
+.dpnum{font:600 9.5px var(--ui); color:var(--ink-dim); font-variant-numeric:tabular-nums;
+  line-height:1}
+.dpnum.cur{color:var(--ink-hi)}
+.slotbox{height:75%; aspect-ratio:2.15; background:#05070A; border:1px solid var(--rule);
+  border-radius:1px; position:relative; overflow:hidden}
+.slotbox.pick{height:80%; aspect-ratio:2.0}
+.slotbox.empty{border-style:dashed; opacity:.5}
+.slotbox.skipped{opacity:.35}
+.slotbox img{width:100%; height:100%; object-fit:cover; display:block}
+.slotbox.banned img{filter:grayscale(1) brightness(.5)}
+/* thick diagonal strike across the whole portrait, like the reference,
+   plus a small ✕ at the outer edge if there's room for it */
+.slotbox.banned::after{content:''; position:absolute; inset:0; z-index:0; background:
+  linear-gradient(45deg,transparent 42%,rgba(194,60,42,.92) 46%,
+  rgba(194,60,42,.92) 54%,transparent 58%)}
+.slotbox .banx{position:absolute; top:50%; transform:translateY(-50%);
+  color:#fff; font-weight:700; font-size:10px; background:rgba(5,7,10,.72);
+  border-radius:50%; width:14px; height:14px; display:flex; align-items:center;
+  justify-content:center; z-index:1}
+.dpslot.left .banx{left:1px} .dpslot.right .banx{right:1px}
+.slotbox.cur{background:transparent; border:1px solid #8CA2B5; display:flex;
+  align-items:center; justify-content:center; color:var(--ink-hi);
+  font:700 9.5px var(--ui); letter-spacing:.1em; text-transform:uppercase;
+  animation:nextpulse 1.4s ease-in-out infinite}
+@keyframes nextpulse{0%,100%{box-shadow:0 0 0 0 rgba(232,237,242,.5)}
+  50%{box-shadow:0 0 0 4px rgba(232,237,242,0)}}
+
+/* --- action box: selection + the one lock button, client-style --- */
+/* Two lines: portrait + name (+ reason under the name) on top, the big
+   BAN/PICK button full-width underneath — a name next to a button had too
+   little room and truncated awkwardly ("No hero ..."). */
+.actionbox{display:flex; flex-direction:column; gap:8px; padding:9px 12px;
+  background:var(--panel); border:1px solid var(--rule); border-radius:2px; flex:0 0 auto}
+.selinfo{display:flex; align-items:center; gap:10px; min-width:0}
+.selim{width:56px; height:32px; background:#0E1218; border:1px solid var(--rule);
+  border-radius:1px; overflow:hidden; display:flex; align-items:center; justify-content:center;
+  flex:0 0 auto}
+.selim img{width:100%; height:100%; object-fit:cover}
+.selim .ph{color:#2A323B; font-size:16px}
+.seltext{min-width:0; flex:1}
+.selname{font-size:13.5px; color:var(--ink-hi); font-weight:600; white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis}
+.selreason{font-size:10px; color:var(--ink-dim); letter-spacing:.08em; text-transform:uppercase;
+  min-height:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.lockbtn{width:100%; font-size:12.5px; padding:10px 16px; letter-spacing:.14em}
+.lockbtn.ban{background:linear-gradient(180deg,#D6604A,#B0311F); border-color:#7A2015;
+  color:#1B0705}
+.lockbtn.ban:hover:not(:disabled){filter:brightness(1.12); color:#1B0705}
+.lockbtn.pick{background:linear-gradient(180deg,var(--go-hi),var(--go)); border-color:#3F6614;
+  color:#0E1408}
+.lockbtn.pick:hover:not(:disabled){filter:brightness(1.12); color:#0E1408}
 
 /* --- summary --- */
 .overlay{display:none; position:fixed; inset:0; background:rgba(6,9,13,.9); z-index:50;
@@ -293,29 +362,31 @@ body.burning .clock.reserve{animation:ticktock 1s steps(1) infinite}
 ::-webkit-scrollbar-thumb{background:var(--rule); border-radius:0}
 ::-webkit-scrollbar-track{background:transparent}
 
-@media (max-width:1180px){
-  .arena{flex-wrap:wrap}
-  .pickcol{flex:1 1 100%}
-  .slots{flex-direction:row}
-  .pcard{flex:1}
-  .pickcol .roster{display:none}
-  .gridwrap{flex:1 1 100%; order:-1}
-}
-@media (max-width:820px){
-  .topbar{grid-template-columns:1fr}
-  .tbox.right .tline,.tbox.right .nm,.tbox.right .tmeta{flex-direction:row}
-  .tbox.right .banstrip{justify-content:flex-start}
-  .teamcols,.panels,.oteams{flex-direction:column}
-  .panelbox.narrow{flex:1 1 auto}
+@media (max-width:900px){
+  /* below here the board may stack and scroll: only the three target
+     desktop sizes are required to fit with no page scroll */
+  .board.on{height:auto; min-height:0; overflow:visible}
+  body{overflow-x:hidden; overflow-y:auto}
+  .topicons{position:static; margin-bottom:6px; justify-content:center}
+  .rosterrow{flex-wrap:wrap; row-gap:8px}
+  .mainrow{flex-direction:column; flex:0 0 auto}
+  .gridwrap{min-height:340px}
+  .herogrid{flex-wrap:wrap; overflow:visible}
+  .drawer{width:100%; flex:0 0 auto}
+  .rightcol{width:100%; flex:0 0 auto}
+  .draftpanel{min-height:420px}
+  .teamcols,.oteams{flex-direction:column}
 }
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation-duration:.001ms !important; animation-iteration-count:1 !important;
     transition-duration:.001ms !important}
   body.burning .burn{opacity:.85}
+  .slotbox.cur{animation:none; box-shadow:0 0 0 3px var(--ink-hi)}
 }
 </style>
 </head>
 <body>
+<div class="vignette" aria-hidden="true"></div>
 <div class="burn" aria-hidden="true"></div>
 <div class="wrap">
   <h1>Captains Mode</h1>
@@ -361,66 +432,68 @@ body.burning .clock.reserve{animation:ticktock 1s steps(1) infinite}
   <!-- ================= BOARD ================= -->
   <div class="board" id="board">
     <div class="topbar">
-      <div class="tbox" id="tboxL">
-        <div class="tline">
-          <span class="nm" id="tnL"></span>
-          <span class="tmeta"><span class="fp" id="fpL"></span><span class="reserve" id="rvL"></span></span>
+      <div class="topicons">
+        <button id="settingsBtn" class="iconbtn" type="button" aria-label="Settings">&#9881;</button>
+        <button id="soundBtn" class="iconbtn" type="button" aria-label="Toggle sound" aria-pressed="true">&#128266;</button>
+        <input type="range" id="volumeSlider" class="volslider" min="0" max="100" value="50" aria-label="Sound volume">
+        <button id="resetBtn" class="iconbtn leave" type="button" aria-label="Leave draft">Leave draft</button>
+      </div>
+      <div class="rosterrow">
+        <div class="teamcards" id="cardsL"></div>
+        <div class="clockblock">
+          <div class="reservebox"><div class="rlabel">Reserve</div><div class="rtime" id="rvL">--</div></div>
+          <div class="clockcol">
+            <div class="clock" id="clock">--:--</div>
+            <div class="cmlabel">Captains Mode</div>
+          </div>
+          <div class="reservebox"><div class="rlabel">Reserve</div><div class="rtime" id="rvR">--</div></div>
         </div>
-        <div class="banstrip" id="bansL"></div>
+        <div class="teamcards" id="cardsR"></div>
       </div>
-      <div class="tcenter">
-        <div class="turnlabel" id="phaseName">&nbsp;</div>
-        <div class="clock" id="clock">--</div>
-        <div class="clockbar"><i id="clockFill" style="width:100%"></i></div>
-        <div class="turnwho" id="turnWho">&nbsp;</div>
-      </div>
-      <div class="tbox right" id="tboxR">
-        <div class="tline">
-          <span class="nm" id="tnR"></span>
-          <span class="tmeta"><span class="fp" id="fpR"></span><span class="reserve" id="rvR"></span></span>
-        </div>
-        <div class="banstrip" id="bansR"></div>
-      </div>
+      <div class="turnheading" id="turnHeading" aria-live="polite">&nbsp;</div>
     </div>
 
-    <div class="spine" id="seqstrip"></div>
-
-    <div class="arena">
-      <div class="pickcol" id="colL">
-        <div class="slots" id="slotsL"></div>
-        <div class="roster" id="rosL"></div>
-      </div>
+    <div class="mainrow">
       <div class="gridwrap">
         <div class="gridtop">
           <input type="text" id="heroSearch" placeholder="Search heroes" aria-label="Search heroes">
+          <button id="hintsToggle" class="hintsbtn" type="button" aria-pressed="false">Hints</button>
         </div>
         <div id="heroGrid"></div>
-        <div class="lockrow">
-          <div class="picking" id="pickingLbl"></div>
-          <button id="lockBtn" class="primary" disabled>Select hero</button>
-          <button id="resetBtn" style="font-size:10px; padding:6px 14px; margin-left:12px">Leave draft</button>
+      </div>
+      <div class="drawer" id="hintsDrawer">
+        <div class="panelbox"><h3>Win read</h3>
+          <div class="meterrow">
+            <div class="mlab l" id="mlabL">50%</div>
+            <div class="meter"><div class="mfl" id="meterFill" style="width:50%"></div>
+              <div class="mfr"></div><div class="mmark"></div></div>
+            <div class="mlab r" id="mlabR">50%</div>
+          </div>
+          <div class="mhint" id="mhint"></div>
+        </div>
+        <div class="panelbox"><h3>Scouting report</h3><div id="suggBox">
+          <div class="hintlite">Hints appear on your turn.</div>
+        </div></div>
+      </div>
+      <div class="rightcol">
+        <div class="draftpanel" id="draftPanel">
+          <div class="dpheader">
+            <div class="dpcol radiant" id="dpHeadL">Radiant</div>
+            <div class="dpcol dire" id="dpHeadR">Dire</div>
+          </div>
+          <div class="dpbody" id="dpBody"></div>
+        </div>
+        <div class="actionbox">
+          <div class="selinfo">
+            <div class="selim" id="selIm"><div class="ph">?</div></div>
+            <div class="seltext">
+              <div class="selname" id="selName">No hero selected</div>
+              <div class="selreason" id="selReason"></div>
+            </div>
+          </div>
+          <button id="lockBtn" class="lockbtn" disabled>Select a hero</button>
         </div>
       </div>
-      <div class="pickcol" id="colR">
-        <div class="slots" id="slotsR"></div>
-        <div class="roster" id="rosR"></div>
-      </div>
-    </div>
-
-    <div class="panels">
-      <div class="panelbox narrow"><h3>Win read</h3>
-        <div class="meterrow">
-          <div class="mlab l" id="mlabL">50%</div>
-          <div class="meter"><div class="mfl" id="meterFill" style="width:50%"></div>
-            <div class="mfr"></div><div class="mmark"></div></div>
-          <div class="mlab r" id="mlabR">50%</div>
-        </div>
-        <div class="mhint" id="mhint"></div>
-      </div>
-      <div class="panelbox"><h3>Scouting report</h3><div id="suggBox">
-        <div class="hintlite">Hints appear on your turn.</div>
-      </div></div>
-      <div class="panelbox"><h3>Draft log</h3><div class="feed" id="feed"></div></div>
     </div>
   </div>
 
@@ -444,6 +517,11 @@ const CDN = "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react
 /* attribute colours as the client shows them */
 const ATTRS = [["str","Strength","#EE3B21"],["agi","Agility","#26E030"],
                ["int","Intelligence","#00A5E0"],["all","Universal","#B47CE8"]];
+/* real Dota player-slot colours, in roster order */
+const SLOT_COLORS = {
+  radiant: ["#3375FF","#66FFBF","#BF00BF","#F3F00B","#FF6B00"],
+  dire:    ["#FE86C2","#A1B447","#65D9F7","#008321","#A46900"],
+};
 
 let ST = null;
 let mineSel = [], enemySel = [];
@@ -451,7 +529,6 @@ let mineKey = "", enemyKey = "";
 let firstChoice = "random", sideChoice = "random";
 let selectedHid = null;
 let heroQuery = "";
-let lastEventCount = -1;
 
 function esc(s){ return String(s == null ? "" : s).replace(/[&<>"']/g,
   c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
@@ -470,6 +547,163 @@ function fmtClock(s){ s = Math.max(0, Math.ceil(s));
   return Math.floor(s/60) + ":" + String(s%60).padStart(2,"0"); }
 function rtClass(v){ return v >= 1 ? "pos" : (v <= -1 ? "neg" : "mid"); }
 function rtText(v){ return (v >= 0 ? "+" : "") + v.toFixed(1); }
+
+/* ================= sound =================
+   Wired to the user's own exported Dota 2 draft sounds in
+   scout/assets/sounds/ (event names + relative volumes taken from the
+   client's own soundevents/game_sounds_ui_imported.vsndevts) — see the
+   README there. Any name missing on disk falls back to a small synthesized
+   Web Audio equivalent, so the board always makes SOME sound. Audio never
+   starts before the user's first interaction (autoplay rules); Start draft
+   counts, and so does touching the sound controls themselves. */
+const SOUND_VOL = {                 // relative volume, straight from the client
+  music:0.35, draft_start:0.16, advance:0.2, ban:0.16, pick:0.16,
+  pick_made:0.66, countdown:0.3, announcer_10s:0.66, announcer_5s:0.66,
+  your_ban:0.66, your_pick:0.66, enemy_ban:0.66, enemy_pick:0.66,
+};
+const SOUND_NAMES = Object.keys(SOUND_VOL);
+const SOUND_EXTS = ["mp3","ogg","wav","webm"];
+const realSounds = {};
+let soundEventLog = [];             // for Playwright verification: which events fired
+let audioCtx = null;
+let userInteracted = false;
+let soundOn = true;
+let volume = 0.5;
+try { const s = localStorage.getItem("hd_sound"); if (s !== null) soundOn = s === "1"; } catch (e) {}
+try { const v = localStorage.getItem("hd_volume"); if (v !== null && !isNaN(+v)) volume = Math.min(1, Math.max(0, +v)); } catch (e) {}
+let musicEl = null, musicFading = false;
+
+function markInteracted(){
+  userInteracted = true;
+  ensureAudioCtx();
+}
+function ensureAudioCtx(){
+  if (audioCtx) return audioCtx;
+  try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+  return audioCtx;
+}
+async function probeRealSounds(){
+  for (const name of SOUND_NAMES){
+    for (const ext of SOUND_EXTS){
+      const url = "/sounds/" + name + "." + ext;
+      try {
+        const r = await fetch(url, {method:"HEAD", cache:"no-store"});
+        if (r.ok){ realSounds[name] = url; break; }
+      } catch (e) {}
+    }
+  }
+  if (realSounds.music){
+    musicEl = new Audio(realSounds.music);
+    musicEl.loop = true;
+    musicEl.volume = soundOn ? volume * SOUND_VOL.music : 0;
+  }
+}
+function scheduleTone(delay, freq, dur, gain, type){
+  const ctx = ensureAudioCtx(); if (!ctx || gain <= 0) return;
+  const t0 = ctx.currentTime + delay;
+  const o = ctx.createOscillator(), g = ctx.createGain();
+  o.type = type || "sine";
+  o.frequency.setValueAtTime(freq, t0);
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.linearRampToValueAtTime(gain, t0 + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  o.connect(g); g.connect(ctx.destination);
+  o.start(t0); o.stop(t0 + dur + 0.03);
+}
+function synthThudGain(gain){
+  const ctx = ensureAudioCtx(); if (!ctx) return;
+  const o = ctx.createOscillator(), g = ctx.createGain();
+  o.type = "sine";
+  o.frequency.setValueAtTime(160, ctx.currentTime);
+  o.frequency.exponentialRampToValueAtTime(55, ctx.currentTime + 0.28);
+  g.gain.setValueAtTime(gain, ctx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.32);
+  o.connect(g); g.connect(ctx.destination);
+  o.start(); o.stop(ctx.currentTime + 0.34);
+}
+/* Fallback synthesis for each real-file event, used only when that file is
+   missing from scout/assets/sounds/. `gain` is already volume-scaled. */
+const SYNTH_FALLBACK = {
+  draft_start:   g => { scheduleTone(0, 587.33, 0.16, g, "triangle"); scheduleTone(0.11, 880, 0.22, g, "triangle"); },
+  advance:       g => scheduleTone(0, 1200, 0.045, g * 0.6, "sine"),
+  ban:           g => synthThudGain(g),
+  pick:          g => { scheduleTone(0, 523.25, 0.28, g, "triangle"); scheduleTone(0.09, 783.99, 0.28, g, "triangle"); },
+  pick_made:     g => scheduleTone(0, 1318.5, 0.24, g, "triangle"),
+  countdown:     g => scheduleTone(0, 1000, 0.08, g, "sine"),
+  announcer_10s: g => { scheduleTone(0, 700, 0.15, g, "square"); scheduleTone(0.17, 700, 0.15, g, "square"); },
+  announcer_5s:  g => { scheduleTone(0, 920, 0.14, g, "square"); scheduleTone(0.15, 920, 0.14, g, "square"); },
+  your_ban:      g => { scheduleTone(0, 740, 0.14, g, "square"); scheduleTone(0.16, 980, 0.16, g, "square"); },
+  your_pick:     g => { scheduleTone(0, 740, 0.14, g, "square"); scheduleTone(0.16, 980, 0.16, g, "square"); },
+  enemy_ban:     g => scheduleTone(0, 420, 0.22, g, "sawtooth"),
+  enemy_pick:    g => scheduleTone(0, 420, 0.22, g, "sawtooth"),
+};
+function synthDraftComplete(){
+  // Only reached when NO real sound files exist at all (see poll()) — the
+  // client itself plays no dedicated "draft complete" line.
+  const ctx = ensureAudioCtx(); if (!ctx) return;
+  [523.25, 659.25, 783.99, 1046.5].forEach((f, i) =>
+    scheduleTone(i * 0.12, f, 0.4, 0.28 * volume, "triangle"));
+}
+function playSound(name){
+  if (!soundOn || !userInteracted) return;
+  soundEventLog.push(name);
+  if (soundEventLog.length > 200) soundEventLog.splice(0, soundEventLog.length - 200);
+  const base = SOUND_VOL[name] != null ? SOUND_VOL[name] : 0.3;
+  const url = realSounds[name];
+  if (url){
+    try {
+      const a = new Audio(url);
+      a.volume = Math.max(0, Math.min(1, volume * base));
+      a.play().catch(() => {});
+      return;
+    } catch (e) {}
+  }
+  const fn = SYNTH_FALLBACK[name];
+  if (fn) fn(Math.max(0.0001, base * 0.45 * volume));
+}
+function anyRealSounds(){ return Object.keys(realSounds).length > 0; }
+function startMusic(){
+  if (!musicEl || !userInteracted || !soundOn) return;
+  musicFading = false;
+  musicEl.volume = volume * SOUND_VOL.music;
+  musicEl.currentTime = 0;
+  musicEl.play().catch(() => {});
+}
+function stopMusicFade(durationMs){
+  durationMs = durationMs || 2000;
+  if (!musicEl || musicEl.paused || musicFading) return;
+  musicFading = true;
+  const startVol = musicEl.volume;
+  const t0 = performance.now();
+  const step = () => {
+    if (!musicEl) return;
+    const frac = Math.min(1, (performance.now() - t0) / durationMs);
+    musicEl.volume = startVol * (1 - frac);
+    if (frac < 1) requestAnimationFrame(step);
+    else { musicEl.pause(); musicFading = false; }
+  };
+  requestAnimationFrame(step);
+}
+function applySoundUI(){
+  const btn = document.getElementById("soundBtn");
+  btn.innerHTML = soundOn ? "&#128266;" : "&#128263;";
+  btn.setAttribute("aria-pressed", soundOn ? "true" : "false");
+  document.getElementById("volumeSlider").value = Math.round(volume * 100);
+  if (musicEl && !musicFading) musicEl.volume = soundOn ? volume * SOUND_VOL.music : 0;
+}
+document.getElementById("soundBtn").onclick = () => {
+  markInteracted();
+  soundOn = !soundOn;
+  try { localStorage.setItem("hd_sound", soundOn ? "1" : "0"); } catch (e) {}
+  applySoundUI();
+};
+document.getElementById("volumeSlider").oninput = e => {
+  markInteracted();
+  volume = Math.max(0, Math.min(1, e.target.value / 100));
+  try { localStorage.setItem("hd_volume", String(volume)); } catch (e) {}
+  applySoundUI();
+};
+applySoundUI();
 
 /* ================= setup screen ================= */
 function renderChips(){
@@ -550,6 +784,7 @@ seg("firstSeg", v => firstChoice = v);
 seg("sideSeg", v => sideChoice = v);
 
 document.getElementById("startBtn").onclick = async () => {
+  markInteracted();
   const warn = document.getElementById("setupWarn");
   if (!mineSel.length || !enemySel.length){
     warn.textContent = "Both teams need at least one player."; return; }
@@ -579,34 +814,136 @@ document.getElementById("newBtn").onclick = async () => {
    grid — positions stay put, so the spatial memory the drill is building
    survives a search. */
 const GRID_COLS = { str: 6, agi: 6, int: 6, all: 4 };
+/* hints: off by default, remembered per browser (never required to draft) */
+let hintsOn = false;
+try { hintsOn = localStorage.getItem("hd_hints") === "1"; } catch (e) {}
+function applyHintsUI(){
+  document.getElementById("hintsDrawer").classList.toggle("on", hintsOn);
+  const btn = document.getElementById("hintsToggle");
+  btn.classList.toggle("on", hintsOn);
+  btn.setAttribute("aria-pressed", hintsOn ? "true" : "false");
+  syncGrid();
+  sizeHeroGrid();   // the drawer changes gridwrap's width, which changes nothing
+                     // for tile size (height-driven) but the grid may need to
+                     // re-wrap/re-centre — cheap, so just always re-measure
+}
+document.getElementById("hintsToggle").onclick = () => {
+  hintsOn = !hintsOn;
+  try { localStorage.setItem("hd_hints", hintsOn ? "1" : "0"); } catch (e) {}
+  applyHintsUI();
+};
 function buildGrid(){
   const root = document.getElementById("heroGrid");
   root.className = "herogrid"; root.innerHTML = "";
   const mkTile = hid => {
     const t = document.createElement("div");
     t.className = "tile"; t.id = "tile" + hid;
+    t.tabIndex = 0; t.setAttribute("role", "button"); t.setAttribute("aria-label", hname(hid));
     t.innerHTML = '<div class="im">' + img(hid) + '</div>' +
                   '<div class="rb" id="rb' + hid + '" style="display:none"></div>';
     t.onclick = () => selectHero(hid);
+    /* Space always toggles the selection; Enter selects on first press but,
+       once already selected, falls through to the document-level handler
+       below that locks it in - so Enter both selects and confirms, in two
+       presses, the same as click-then-lock. */
+    t.addEventListener("keydown", e => {
+      if (e.key === " "){ e.preventDefault(); selectHero(hid); return; }
+      if (e.key === "Enter" && selectedHid !== hid){
+        e.preventDefault(); e.stopPropagation(); selectHero(hid);
+      }
+    });
     return t;
   };
-  ATTRS.forEach(([attr, label, color]) => {
+  const groups = ATTRS.map(([attr, label, color]) => {
     const sub = Object.keys(HEROES).map(Number)
       .filter(h => (HEROES[h].attr || "all") === attr)
       .sort((a,b) => HEROES[a].n.localeCompare(HEROES[b].n));
-    if (!sub.length) return;
+    const cols = GRID_COLS[attr] || 6;
+    return {attr, label, color, sub, cols, rows: Math.ceil(sub.length / cols)};
+  }).filter(g => g.sub.length);
+  /* every group shares the tallest group's row count, so a tile is the same
+     height everywhere regardless of which attribute has fewer heroes */
+  const maxRows = Math.max(1, ...groups.map(g => g.rows));
+  heroMaxRows = maxRows;
+  heroGroupCols = groups.map(g => g.cols);
+  groups.forEach(({label, color, sub, cols}) => {
     const group = document.createElement("div"); group.className = "attrgroup";
     const head = document.createElement("div"); head.className = "attrhead";
     head.innerHTML = '<div class="dot" style="background:' + color + '"></div><span>' +
                      label + '</span>';
     group.appendChild(head);
     const g = document.createElement("div"); g.className = "grid";
-    g.style.gridTemplateColumns = "repeat(" + (GRID_COLS[attr] || 6) + ", var(--tile))";
+    g.style.gridTemplateColumns = "repeat(" + cols + ", var(--tile))";
+    g.style.gridTemplateRows = "repeat(" + maxRows + ", minmax(0,1fr))";
     sub.forEach(hid => g.appendChild(mkTile(hid)));
     group.appendChild(g);
     root.appendChild(group);
   });
+  sizeHeroGrid();
 }
+
+/* Measures the real, current layout (not a viewport-relative guess) to pick
+   a tile size that fills #heroGrid's available height with no per-row gap,
+   WITHOUT ever making a group wider than the panel (that would scroll the
+   Strength group off-screen, failing "all four attribute groups visible"):
+     rowBudget = (available height - attribute header - inter-row gaps) / rows
+     colBudget = (available width - inter-group/intra-group gaps) / total cols
+     tile      = min(colBudget, rowBudget / TILE_RATIO), clamped to [26, 84]
+   TILE_RATIO (2.3, matching .tile .im's max-height) is taller than a literal
+   Dota portrait's ~1.6 aspect: at this panel's actual width (a fixed-width
+   draft column takes ~23% of it), the hero grid is normally width-bound, so
+   raising the ratio lets the image use more of the height that a stricter
+   1.6 would otherwise leave as gap, at the cost of a slightly taller crop.
+   #heroGrid then gets that exact computed height (flex:0 0 auto, not
+   flex:1), so any leftover space collapses into ONE gap below the whole
+   grid instead of one gap under every row. Only when height is the binding
+   term does the fill-the-height goal fully land (zero leftover); when width
+   binds instead, a bigger bottom gap is the correct trade-off — it beats
+   hiding a whole attribute group behind a horizontal scrollbar. Re-run on
+   hints toggle and window resize since both change gridwrap's box. */
+let heroMaxRows = 6;
+let heroGroupCols = [6, 6, 6, 4];
+let sizeHeroGridQueued = false;
+function sizeHeroGrid(){
+  const wrap = document.querySelector(".gridwrap");
+  const gridtop = document.querySelector(".gridtop");
+  const heroGridEl = document.getElementById("heroGrid");
+  const head = heroGridEl && heroGridEl.querySelector(".attrhead");
+  if (!wrap || !gridtop || !heroGridEl || !head) return;
+  const wrapRect = wrap.getBoundingClientRect();
+  const wrapCS = getComputedStyle(wrap);
+  const padBottom = parseFloat(wrapCS.paddingBottom) || 0;
+  const padLeft = parseFloat(wrapCS.paddingLeft) || 0;
+  const padRight = parseFloat(wrapCS.paddingRight) || 0;
+  const topRect = gridtop.getBoundingClientRect();
+  const topMarginBottom = parseFloat(getComputedStyle(gridtop).marginBottom) || 0;
+  const headRect = head.getBoundingClientRect();
+  const headMarginBottom = parseFloat(getComputedStyle(head).marginBottom) || 0;
+  const availH = (wrapRect.bottom - padBottom) -
+                 (topRect.bottom + topMarginBottom) - (headRect.height + headMarginBottom);
+  const availW = wrapRect.width - padLeft - padRight;
+  if (availH <= 0 || availW <= 0) return;
+
+  const rows = heroMaxRows;
+  const rowGapTotal = (rows - 1) * 3;
+  const rowBudget = (availH - rowGapTotal) / rows;
+
+  const totalCols = heroGroupCols.reduce((a, b) => a + b, 0);
+  const totalColGapsWithin = heroGroupCols.reduce((a, c) => a + (c - 1) * 3, 0);
+  const totalInterGroupGaps = (heroGroupCols.length - 1) * 12;
+  const colBudget = (availW - totalInterGroupGaps - totalColGapsWithin) / totalCols;
+
+  const TILE_RATIO = 2.3;
+  const tile = Math.max(26, Math.min(84, Math.min(colBudget, rowBudget / TILE_RATIO)));
+  document.documentElement.style.setProperty("--tile", tile.toFixed(2) + "px");
+  const gridHeight = Math.min(rows * (tile * TILE_RATIO) + rowGapTotal, availH);
+  heroGridEl.style.height = gridHeight.toFixed(2) + "px";
+}
+window.addEventListener("resize", () => {
+  if (sizeHeroGridQueued) return;
+  sizeHeroGridQueued = true;
+  requestAnimationFrame(() => { sizeHeroGridQueued = false; sizeHeroGrid(); });
+});
 function selectHero(hid){
   if (!ST || !ST.turn || !ST.turn.is_me) return;
   if (ST.taken.includes(hid)) return;
@@ -637,10 +974,10 @@ function syncGrid(){
     const t = document.getElementById("tile" + hid); if (!t) return;
     t.classList.toggle("taken", taken.has(hid));
     t.classList.toggle("sel", selectedHid === hid);
-    t.classList.toggle("sugg", suggs.has(hid) && !taken.has(hid));
+    t.classList.toggle("sugg", hintsOn && suggs.has(hid) && !taken.has(hid));
     t.classList.toggle("dim", !!heroQuery && !hname(hid).toLowerCase().includes(heroQuery));
     const rb = document.getElementById("rb" + hid);
-    if (ratings && ratings[hid] !== undefined && !taken.has(hid)){
+    if (hintsOn && ratings && ratings[hid] !== undefined && !taken.has(hid)){
       const v = ratings[hid];
       rb.style.display = "block";
       rb.textContent = rtText(v);
@@ -650,49 +987,77 @@ function syncGrid(){
       rb.style.display = "none"; t.title = hname(hid);
     }
   });
-  const myTurn = ST && ST.turn && ST.turn.is_me;
+  renderActionBox();
+}
+
+/* ================= action box ================= */
+function renderActionBox(){
+  const selIm = document.getElementById("selIm");
+  const selName = document.getElementById("selName");
+  const selReason = document.getElementById("selReason");
   const btn = document.getElementById("lockBtn");
-  btn.disabled = !(myTurn && selectedHid != null);
-  const lbl = document.getElementById("pickingLbl");
-  if (myTurn){
-    const verb = ST.turn.type === "ban" ? "Ban" : "Pick";
-    let extra = "";
-    if (selectedHid != null && ratings && ratings[selectedHid] !== undefined)
-      extra = " (" + rtText(ratings[selectedHid]) + ")";
-    lbl.textContent = selectedHid != null
-      ? verb + ": " + hname(selectedHid) + extra
-      : "Select a hero to " + verb.toLowerCase();
-    btn.textContent = selectedHid != null ? verb + " hero" : "Select hero";
+  const t = ST && ST.turn;
+  if (!t){
+    selIm.innerHTML = '<div class="ph">?</div>';
+    selName.textContent = "No hero selected";
+    selReason.textContent = "";
+    btn.className = "lockbtn"; btn.disabled = true; btn.textContent = "Select a hero";
+    return;
+  }
+  const verb = t.type === "ban" ? "Ban" : "Pick";
+  btn.className = "lockbtn " + t.type;
+  if (t.is_me){
+    if (selectedHid != null){
+      selIm.innerHTML = img(selectedHid);
+      selName.textContent = hname(selectedHid);
+      selReason.textContent = "";
+      btn.disabled = false;
+      btn.textContent = verb + " " + hname(selectedHid);
+    } else {
+      selIm.innerHTML = '<div class="ph">?</div>';
+      selName.textContent = "No hero selected";
+      selReason.textContent = "Your turn to " + verb.toLowerCase();
+      btn.disabled = true;
+      btn.textContent = "Select a hero";
+    }
   } else {
-    lbl.textContent = ""; btn.textContent = "Select hero";
+    selIm.innerHTML = '<div class="ph">?</div>';
+    selName.textContent = "No hero selected";
+    selReason.textContent = (ST.enemy_name || "Opponent") + " is " +
+      (t.type === "ban" ? "banning" : "picking");
+    btn.disabled = true;
+    btn.textContent = verb + " hero";
   }
 }
 
 /* ================= board rendering ================= */
 function sideTeams(){
-  // left column = Radiant, right = Dire — like the in-game client
+  // left = Radiant, right = Dire — like the in-game client. ST.teams is
+  // always indexed [0]=first-pick,[1]=second-pick, and each seq step's
+  // "team" field is that same index, so ST.teams[step.team] gives the
+  // acting team directly without re-deriving F/S from "is_me".
   const rad = ST.teams.find(t => t.side === "radiant") || ST.teams[0];
   const dire = ST.teams.find(t => t.side === "dire") || ST.teams[1];
   return [rad, dire];
 }
-function firstTag(tm){
-  const fp = (ST.me_first && tm.is_me) || (ST.me_first === false && !tm.is_me);
-  return fp ? "First pick" : "Second pick";
-}
 
-function renderTop(){
+function renderTeamCards(){
   const [L, R] = sideTeams();
-  [[L,"L"],[R,"R"]].forEach(([tm, s]) => {
+  [[L, "cardsL"], [R, "cardsR"]].forEach(([tm, elId]) => {
+    const el = document.getElementById(elId);
+    el.innerHTML = "";
     if (!tm) return;
-    document.getElementById("tbox" + s).className =
-      "tbox " + (s === "R" ? "right " : "") + tm.side;
-    document.getElementById("tn" + s).textContent =
-      tm.label + (tm.is_me ? " (you)" : "");
-    document.getElementById("fp" + s).textContent = firstTag(tm);
-    const rv = document.getElementById("rv" + s);
-    const sec = tm.reserve_ms / 1000;
-    rv.innerHTML = "Reserve <b>" + fmtClock(sec) + "</b>";
-    rv.classList.toggle("low", sec < 30);
+    const colors = SLOT_COLORS[tm.side] || SLOT_COLORS.radiant;
+    for (let i = 0; i < 5; i++){
+      const p = tm.players[i];
+      const card = document.createElement("div"); card.className = "pcard";
+      // Team Scout's roster data carries no captain flag, so no crown is
+      // shown here — see herodraft_html.py's docstring / the delivery report.
+      card.innerHTML =
+        '<div class="cardbody" style="--slot-color:' + colors[i] + '"></div>' +
+        '<div class="pname">' + esc(p ? p.name : "") + '</div>';
+      el.appendChild(card);
+    }
   });
 }
 
@@ -718,118 +1083,166 @@ function renderMeter(){
                                     : esc(ST.enemy_name) + " is " + (100-myPct).toFixed(0) + "% favoured");
 }
 
-function renderBans(){
-  const [L, R] = sideTeams();
-  [[L,"bansL"],[R,"bansR"]].forEach(([tm, elId]) => {
-    const el = document.getElementById(elId); el.innerHTML = "";
-    const nbans = 7;
-    for (let i = 0; i < nbans; i++){
-      const hid = tm && tm.bans[i];
-      const b = document.createElement("div");
-      b.className = "b" + (hid ? " used" : "");
-      if (hid){ b.innerHTML = img(hid); b.title = "Banned: " + hname(hid); }
-      el.appendChild(b);
+/* The 24-step Captains Mode sequence, drawn as a vertical panel: bans as
+   small wide boxes, picks as larger ones, each on its acting team's side of
+   a centre line carrying the step number. The current step shows an
+   outlined BAN/PICK button in place of a hero. */
+/* Packs the 24 fixed steps into visual rows the way the client does: two
+   CONSECUTIVE steps of the same type but opposite teams share one row
+   (Radiant left / Dire right, both step numbers stacked in the centre
+   column); a step whose neighbour is the same team, or a different type
+   (a ban next to a pick), starts its own row. This is why one bare CM
+   phase boundary (a same-team pair, e.g. the F,F opener) still gets two
+   rows while the rest pair up — for the current 7/2/3/6/4/2 sequence that
+   packs 24 steps into 14 rows, matching the reference board. Computed once
+   since CM_SEQUENCE (ST.seq) never changes shape during a draft. */
+let draftVisualRows = null;
+function buildVisualRows(seq){
+  const rows = [];
+  let i = 0;
+  while (i < seq.length){
+    if (i + 1 < seq.length && seq[i + 1].type === seq[i].type &&
+        seq[i + 1].team !== seq[i].team){
+      rows.push([i, i + 1]);
+      i += 2;
+    } else {
+      rows.push([i]);
+      i += 1;
     }
-  });
+  }
+  return rows;
 }
 
-function renderCols(){
-  const [L, R] = sideTeams();
-  [[L,"L"],[R,"R"]].forEach(([tm, s]) => {
-    if (!tm) return;
-    const col = document.getElementById("col" + s);
-    col.className = "pickcol " + tm.side;
-    if (ST.turn && ((ST.turn.is_me && tm.is_me) || (!ST.turn.is_me && !tm.is_me)))
-      col.classList.add("active");
-    const wrap = document.getElementById("slots" + s); wrap.innerHTML = "";
-    const hist = {}; (ST.history || []).forEach(h => { if (h.hid != null) hist[h.hid] = h; });
-    for (let k = 0; k < 5; k++){
-      const p = tm.picks[k];
-      const d = document.createElement("div"); d.className = "pcard";
-      if (p){
-        const h = hist[p.hid];
-        const rt = h && h.rating != null
-          ? '<div class="rt ' + rtClass(h.rating) + '">' + rtText(h.rating) + '</div>' : "";
-        d.innerHTML = '<div class="imwrap">' + img(p.hid) + '</div>' + rt +
-          '<div class="cap"><span class="h">' + esc(hname(p.hid)) + '</span>' +
-          (p.player ? '<span class="pl">' + esc(p.player) + '</span>' : "") + '</div>';
+function renderDraftPanel(){
+  const headL = document.getElementById("dpHeadL"), headR = document.getElementById("dpHeadR");
+  const body = document.getElementById("dpBody");
+  const t = ST.turn;
+  const activeTeam = t ? ST.teams[t.team] : null;
+  const activeSide = activeTeam ? activeTeam.side : null;
+  headL.classList.toggle("active", activeSide === "radiant");
+  headR.classList.toggle("active", activeSide === "dire");
+  body.className = "dpbody" + (activeSide ? " act" + activeSide : "");
+  const hist = {}; (ST.history || []).forEach(h => { hist[h.idx] = h; });
+  if (!draftVisualRows) draftVisualRows = buildVisualRows(ST.seq);
+  body.innerHTML = "";
+  draftVisualRows.forEach(stepIdxs => {
+    const row = document.createElement("div"); row.className = "dprow";
+    const rowType = ST.seq[stepIdxs[0]].type;   // both steps share it when paired
+    row.classList.add(rowType);
+    const slotL = document.createElement("div"); slotL.className = "dpslot left";
+    const slotR = document.createElement("div"); slotR.className = "dpslot right";
+    const numCol = document.createElement("div"); numCol.className = "dpnumcol";
+    stepIdxs.forEach(i => {
+      const s = ST.seq[i];
+      const team = ST.teams[s.team];
+      const side = team ? team.side : "radiant";
+      const isCur = i === ST.idx && ST.phase === "drafting";
+      const num = document.createElement("div");
+      num.className = "dpnum" + (isCur ? " cur" : "");
+      num.textContent = String(i + 1);
+      numCol.appendChild(num);
+      const box = document.createElement("div");
+      box.className = "slotbox " + (s.type === "pick" ? "pick" : "ban");
+      const h = hist[i];
+      if (isCur){
+        box.classList.add("cur");
+        box.textContent = s.type === "ban" ? "Ban" : "Pick";
+      } else if (h && h.hid != null){
+        box.innerHTML = img(h.hid);
+        box.title = (s.type === "ban" ? "Banned: " : "Picked: ") + hname(h.hid);
+        if (s.type === "ban"){
+          box.classList.add("banned");
+          const x = document.createElement("div"); x.className = "banx"; x.textContent = "✕";
+          box.appendChild(x);
+        }
+      } else if (h){
+        box.classList.add("skipped");
+        box.title = "Skipped";
       } else {
-        d.innerHTML = '<div class="imwrap"><div class="ph">?</div></div>' +
-                      '<div class="cap"><span class="h">&nbsp;</span></div>';
+        box.classList.add("empty");
       }
-      wrap.appendChild(d);
-    }
-    document.getElementById("ros" + s).innerHTML = tm.players
-      .map(p => "<b>" + esc(p.name) + "</b> <span style='opacity:.7'>" + p.mmr +
-                " · P" + esc(p.role) + "</span>").join("<br>");
+      (side === "radiant" ? slotL : slotR).appendChild(box);
+    });
+    row.appendChild(slotL); row.appendChild(numCol); row.appendChild(slotR);
+    body.appendChild(row);
   });
 }
 
-/* The 24-step spine, cut into the real CM phases. The sequence alternates
-   ban/pick blocks, so a change of step type is exactly a phase boundary. */
-function renderSeq(){
-  const el = document.getElementById("seqstrip"); el.innerHTML = "";
-  const hist = {}; (ST.history || []).forEach(h => hist[h.idx] = h);
-  const [L] = sideTeams();
-  const leftTeamIdx = (L && L.is_me) ? (ST.me_first ? 0 : 1) : (ST.me_first ? 1 : 0);
-  let group = null, row = null, lastType = null;
-  ST.seq.forEach((s, i) => {
-    if (s.type !== lastType){
-      lastType = s.type;
-      group = document.createElement("div"); group.className = "phase " + s.type;
-      const cap = document.createElement("div"); cap.className = "phcap";
-      cap.textContent = s.type === "ban" ? "Ban" : "Pick";
-      row = document.createElement("div"); row.className = "phrow";
-      group.appendChild(cap); group.appendChild(row);
-      el.appendChild(group);
-    }
-    const d = document.createElement("div");
-    const side = (s.team === leftTeamIdx) ? "radiant" : "dire";
-    d.className = "sq " + s.type + " " + side;
-    if (i === ST.idx && ST.phase === "drafting"){
-      d.classList.add("cur"); group.classList.add("curphase");
-    }
-    const h = hist[i];
-    if (h){
-      if (h.hid != null){ d.innerHTML = img(h.hid);
-        if (h.type === "ban") d.classList.add("banned");
-        d.title = (h.type === "ban" ? "Ban: " : "Pick: ") + hname(h.hid) +
-                  (h.rating != null ? " " + rtText(h.rating) : "");
-      } else d.classList.add("skipped");
-    } else d.title = (s.type === "ban" ? "Ban" : "Pick");
-    row.appendChild(d);
+/* ================= clock / reserve / turn heading + tick sounds ================= */
+let lastTickWhole = null;
+let lastAnnouncedIdx = null;        // per-turn: your_ban/your_pick/enemy_ban/enemy_pick
+let turnFlags = {a10: false, a5: false};   // per-turn: each announcer fires once
+let burningIsMe = null;
+
+function updateReserveDisplays(){
+  const [L, R] = sideTeams();
+  [[L,"rvL"],[R,"rvR"]].forEach(([tm, id]) => {
+    const el = document.getElementById(id); if (!tm) return;
+    el.textContent = fmtClock(tm.reserve_ms / 1000);
+    el.classList.toggle("hot", burningIsMe !== null && tm.is_me === burningIsMe);
   });
 }
 
 function renderTurn(){
   const t = ST.turn;
-  const who = document.getElementById("turnWho");
-  const phase = document.getElementById("phaseName");
   const clock = document.getElementById("clock");
-  const fill = document.getElementById("clockFill");
-  if (!t){ who.textContent = "—"; clock.textContent = "--";
-    document.body.classList.remove("burning"); return; }
-  phase.textContent = t.phase_name;
-  const verb = t.type === "ban" ? "banning" : "picking";
-  who.textContent = (t.is_me ? "You are " : ST.enemy_name + " is ") + verb;
-  who.classList.toggle("enemyturn", !t.is_me);
+  const heading = document.getElementById("turnHeading");
+  if (!t){
+    clock.textContent = "--:--"; clock.className = "clock";
+    heading.textContent = " "; heading.className = "turnheading";
+    document.body.classList.remove("burning");
+    burningIsMe = null; lastTickWhole = null; lastAnnouncedIdx = null;
+    updateReserveDisplays();
+    return;
+  }
+  // a new turn: announce it once (your_ban/your_pick/enemy_ban/enemy_pick),
+  // and reset the per-turn 10s/5s announcer flags + tick tracking
+  if (ST.idx !== lastAnnouncedIdx){
+    if (lastAnnouncedIdx !== null) playSound("advance");   // order moved on
+    playSound((t.is_me ? "your_" : "enemy_") + t.type);
+    lastAnnouncedIdx = ST.idx;
+    turnFlags = {a10: false, a5: false};
+    lastTickWhole = null;
+  }
   const elapsed = (Date.now() - ST._recvAt + t.elapsed_ms) / 1000;
   const remain = t.step_secs - elapsed;
   const tm = ST.teams.find(x => x.is_me === t.is_me);
   const reserve = tm ? tm.reserve_ms / 1000 : 0;
+  let secLeft, inReserve;
   if (remain > 0){
     clock.textContent = fmtClock(remain);
     clock.className = "clock";
-    fill.className = ""; fill.style.width = (remain / t.step_secs * 100) + "%";
     document.body.classList.remove("burning");
+    burningIsMe = null;
+    secLeft = remain; inReserve = false;
   } else {
     const rleft = Math.max(0, reserve + remain);
     clock.textContent = fmtClock(rleft);
     clock.className = "clock reserve";
-    fill.className = "reserve";
-    fill.style.width = (reserve > 0 ? rleft / reserve * 100 : 0) + "%";
-    // the one dramatic moment: your own reserve time draining away
     document.body.classList.toggle("burning", t.is_me && rleft > 0);
+    burningIsMe = rleft > 0 ? t.is_me : null;
+    secLeft = rleft; inReserve = true;
+  }
+  updateReserveDisplays();
+  tickClock(secLeft, inReserve);
+  const verb = t.type === "ban" ? "ban" : "pick";
+  heading.textContent = (t.is_me ? "Your team's turn to " : "Enemy team's turn to ") + verb;
+  heading.className = "turnheading" + (t.is_me ? "" : " enemyturn");
+}
+
+/* Countdown ticks: once per second in the main timer's last 5s, and once per
+   second of reserve burn. The 10s/5s announcer marks pre-empt the countdown
+   tick on that exact second (real client behaviour: the line, not the tick). */
+function tickClock(secLeft, inReserve){
+  const whole = Math.ceil(secLeft);
+  if (whole === lastTickWhole) return;
+  lastTickWhole = whole;
+  if (!inReserve){
+    if (whole === 10 && !turnFlags.a10){ playSound("announcer_10s"); turnFlags.a10 = true; return; }
+    if (whole === 5 && !turnFlags.a5){ playSound("announcer_5s"); turnFlags.a5 = true; return; }
+    if (whole > 0 && whole <= 5) playSound("countdown");
+  } else if (whole > 0) {
+    playSound("countdown");
   }
 }
 
@@ -865,18 +1278,6 @@ function renderSuggs(){
   });
 }
 
-function renderFeed(){
-  if (ST.events.length === lastEventCount) return;
-  lastEventCount = ST.events.length;
-  const el = document.getElementById("feed");
-  const myTeam = ST.me_first ? 0 : 1;
-  el.innerHTML = ST.events.slice().reverse().map(e => {
-    let cls = "sys";
-    if (e.team !== undefined) cls = (e.team === myTeam) ? "me" : "en";
-    return '<div class="' + cls + '">' + esc(e.text) + '</div>';
-  }).join("");
-}
-
 function renderSummary(){
   const ov = document.getElementById("overlay");
   if (ST.phase !== "done" || !ST.summary){ ov.classList.remove("on"); return; }
@@ -909,6 +1310,10 @@ function renderSummary(){
 }
 
 /* ================= poll loop ================= */
+let lastHistoryLen = null;
+let lastPhase = null;
+let boardWasVisible = false;
+
 async function poll(){
   try {
     const r = await fetch("/draft/state");
@@ -918,7 +1323,15 @@ async function poll(){
   const drafting = ST.phase === "drafting" || ST.phase === "done";
   document.getElementById("setup").classList.toggle("on", !drafting);
   document.getElementById("board").classList.toggle("on", drafting);
-  if (!drafting) document.body.classList.remove("burning");
+  document.body.classList.toggle("drafting", drafting);
+  if (!drafting){ document.body.classList.remove("burning"); boardWasVisible = false; }
+  if (drafting && !boardWasVisible){
+    // .board is display:none until this first poll, so buildGrid()'s initial
+    // sizeHeroGrid() measured a zero-height box and bailed out — measure for
+    // real now that the board has actually been painted.
+    boardWasVisible = true;
+    requestAnimationFrame(sizeHeroGrid);
+  }
   if (ST.phase === "setup"){
     if (!mineSel.length && ST.my_roster.length) { mineSel = ST.my_roster.slice();
       renderChips(); renderLists(); }
@@ -936,17 +1349,41 @@ async function poll(){
     if (!en.value && ST.enemy_name && ST.enemy_name !== "The Dire")
       en.value = ST.enemy_name;
   }
+  // sound: a ban/pick lock on new history entries, music + phase transitions
+  if (drafting){
+    if (lastHistoryLen !== null && ST.history.length > lastHistoryLen){
+      const last = ST.history[ST.history.length - 1];
+      playSound(last.type === "ban" ? "ban" : "pick");
+      if (last.type === "pick" && last.hid != null && ST.teams[last.team] &&
+          ST.teams[last.team].is_me){
+        playSound("pick_made");   // only for the user's own picks
+      }
+    }
+    lastHistoryLen = ST.history.length;
+  } else {
+    lastHistoryLen = null;
+  }
+  if (ST.phase === "drafting" && lastPhase !== "drafting"){
+    playSound("draft_start");
+    startMusic();
+  }
+  if (ST.phase === "done" && lastPhase !== "done"){
+    stopMusicFade();
+    if (!anyRealSounds()) synthDraftComplete();  // client itself has no such line
+  }
+  if (ST.phase === "setup" && lastPhase && lastPhase !== "setup") stopMusicFade();
+  lastPhase = ST.phase;
   if (drafting){
     if (ST.turn && !ST.turn.is_me) selectedHid = null;
-    renderTop(); renderMeter(); renderBans(); renderCols(); renderSeq();
-    renderTurn(); renderSuggs(); renderFeed();
+    renderTeamCards(); renderMeter(); renderDraftPanel();
+    renderTurn(); renderSuggs();
     syncGrid(); renderSummary();
   }
 }
-setInterval(() => { if (ST && ST.turn) renderTurn(); }, 250);  // smooth clock
+setInterval(() => { if (ST && ST.turn) renderTurn(); }, 250);  // smooth clock + tick sounds
 setInterval(poll, 500);
 
-buildGrid(); fillLeagueSelects(); renderLists(); poll();
+buildGrid(); applyHintsUI(); fillLeagueSelects(); renderLists(); probeRealSounds(); poll();
 </script>
 </body>
 </html>
