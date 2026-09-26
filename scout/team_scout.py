@@ -35,7 +35,8 @@ from .league_history import (
 )
 from .opendota import OpenDota
 from .overrides import load_overrides, save_overrides
-from .rd2l_source import load_rd2l, load_rd2l_matches
+from .ld2l import load_schedule, refresh_schedule_if_new_week
+from .rd2l_source import load_rd2l, load_rd2l_matches, refresh_rd2l_if_new_week
 from .team_scout_html import render_page
 
 MAX_REQUEST_BODY = 16 * 1024  # bytes
@@ -964,6 +965,41 @@ def auto_refresh_cycle(season, bbc_root=None, overrides_path=None):
             f"{round(time.time() - started)}s")
 
 
+def _schedule_matchups(schedule, teams, league_name):
+    """This week's series from ld2l.org, shaped like BBC's posted matchups.
+
+    Returns None when there is no schedule or none of it maps onto a posted
+    team, so the caller keeps BBC's feed instead.
+    """
+    if not schedule or not schedule.get("series"):
+        return None
+    by_key = {team["key"]: team for team in teams}
+    week = schedule.get("week")
+    out = []
+    for row in schedule["series"]:
+        home = by_key.get(team_key(row.get("home")))
+        away = by_key.get(team_key(row.get("away")))
+        if not home or not away:
+            print(f"  ⚠ LD2L schedule: no posted team for "
+                  f"{row.get('home')} vs {row.get('away')}", flush=True)
+            continue
+        out.append({
+            "a": home["name"],
+            "aShort": home.get("short") or home["name"],
+            "aCaptain": home.get("captain") or "",
+            "aKey": home["key"],
+            "b": away["name"],
+            "bShort": away.get("short") or away["name"],
+            "bCaptain": away.get("captain") or "",
+            "bKey": away["key"],
+            "week": week,
+            "label": f"WEEK {week}" if week else "",
+            "score": row.get("score") or "",
+            "league": league_name,
+        })
+    return out or None
+
+
 def build_payload(season, offline=False, bbc_root=None, overrides_path=None):
     """Build the browser payload without refetching every player profile."""
     cache = Cache()
@@ -981,6 +1017,9 @@ def build_payload(season, offline=False, bbc_root=None, overrides_path=None):
     overrides = load_overrides(overrides_path)
     meta = cache.get_blob("hero_meta_stats") or {}
     rd2l = load_rd2l()
+    # Like RD2L, the weekly schedule is fetched even in --offline: it is one
+    # small page, cached for an hour, and a failed fetch keeps the last copy.
+    schedule = load_schedule(season)
 
     if not offline:
         # Best-effort: a failed or slow league-history refresh must never
@@ -1073,7 +1112,8 @@ def build_payload(season, offline=False, bbc_root=None, overrides_path=None):
     for team in teams:
         team["league"] = league_name
     standings = [dict(row) for row in bbc["standings"]]
-    matchups = [dict(row) for row in (bbc.get("matchups") or [])]
+    matchups = (_schedule_matchups(schedule, teams, league_name)
+                or [dict(row) for row in (bbc.get("matchups") or [])])
     for row in standings:
         row.setdefault("league", league_name)
     for row in matchups:
@@ -1353,6 +1393,27 @@ class TeamScoutState:
             stamp = next_stamp
             print("  ↻ BBC feed changed — rebuilding Team Scout", flush=True)
             self.rebuild_async()
+
+    def watch_schedules(self, minutes=None):
+        """Rebuild when ld2l.org or rd2l.gg posts a new week of matchups, so
+        each team's opponent moves on without waiting for the BBC feed."""
+        minutes = config.TEAMSCOUT_SCHEDULE_POLL_MINUTES if minutes is None else minutes
+        threading.Thread(
+            target=self._watch_schedules, args=(minutes,), daemon=True
+        ).start()
+
+    def _watch_schedules(self, minutes):
+        while True:
+            time.sleep(minutes * 60)
+            try:
+                changed = refresh_schedule_if_new_week(self.season)
+                changed = refresh_rd2l_if_new_week() or changed
+            except Exception as exc:  # never take the server down with it
+                print(f"  ⚠ Schedule check failed: {exc}", flush=True)
+                continue
+            if changed:
+                print("  ↻ New league matchups posted — rebuilding Team Scout", flush=True)
+                self.rebuild_async()
 
 
 def _legacy_account(password):
@@ -2118,6 +2179,7 @@ def run_team_scout(season, port=None, offline=False, open_browser=True,
         print(f"  ✗ Port {port} is already in use ({error}).")
         raise SystemExit(1) from error
     state.watch_bbc()
+    state.watch_schedules()
     if auto_refresh:
         state.auto_refresh()
     url = f"http://127.0.0.1:{port}/"

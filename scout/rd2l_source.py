@@ -31,6 +31,7 @@ _PLAYER = re.compile(
     re.S,
 )
 _MATCH_ID = re.compile(r"dotabuff\.com/matches/(\d+)")
+_MATCHUP_WEEK = re.compile(r"Week\s+(\d+)\s+Matchups", re.I)
 
 
 def _cache_path(path=None):
@@ -144,6 +145,12 @@ def parse_matchups(html):
     return rows
 
 
+def parse_matchup_week(html):
+    """The week number from the matchups page title ("Season 39 Week 3 Matchups")."""
+    found = _MATCHUP_WEEK.search(html or "")
+    return int(found.group(1)) if found else None
+
+
 def parse_roster_page(html):
     """Captain, teammates, record, and Dotabuff match ids from one team page."""
     players_at = html.find(">Players<")
@@ -246,6 +253,7 @@ def parse_rd2l(team_html_by_id, standings_html, matchups_html, teams_html, seaso
     for team in teams:
         team["league"] = league
     by_id = {team["id"]: team for team in teams}
+    week = parse_matchup_week(matchups_html)
     matchups = []
     for row in parse_matchups(matchups_html):
         home = by_id.get(row["homeId"])
@@ -264,6 +272,7 @@ def parse_rd2l(team_html_by_id, standings_html, matchups_html, teams_html, seaso
             "bCaptain": away["captain"],
             "bKey": away["key"],
             "league": league,
+            "week": week,
         })
     standings_out = [{
         "name": team["name"],
@@ -284,6 +293,7 @@ def parse_rd2l(team_html_by_id, standings_html, matchups_html, teams_html, seaso
         "players": list(players.values()),
         "standings": standings_out,
         "matchups": matchups,
+        "week": week,
     }
 
 
@@ -374,6 +384,36 @@ def load_rd2l_matches(rd2l, fetcher=None, path=None, offline=False):
         except (TypeError, ValueError):
             continue
     return usable
+
+
+def _pairings(rows):
+    return sorted((row.get("homeId"), row.get("awayId")) for row in rows or [])
+
+
+def refresh_rd2l_if_new_week(path=None, season_id=None, division_id=None):
+    """Poll only the matchups page; refetch the division when it changed.
+
+    Returns True when the cache was rewritten with new pairings, so the
+    caller knows to rebuild. Network failures return False and keep the cache.
+    """
+    path = _cache_path(path)
+    cached = _read_cache(path)
+    season_id = season_id or config.RD2L_SEASON_ID
+    division_id = division_id or config.RD2L_DIVISION_ID
+    session = requests.Session()
+    session.headers["User-Agent"] = "LD2L-Scout/rd2l"
+    try:
+        html = _get(session, f"/seasons/{season_id}/divisions/{division_id}/matchups")
+    except (requests.RequestException, OSError) as exc:
+        print(f"  ⚠ RD2L matchups check failed: {exc}", flush=True)
+        return False
+    posted = parse_matchups(html)
+    if not posted:
+        return False
+    if (cached and _pairings(posted) == _pairings(cached.get("matchups"))
+            and parse_matchup_week(html) == cached.get("week")):
+        return False
+    return load_rd2l(path, force=True) is not None
 
 
 def load_rd2l(path=None, force=False):

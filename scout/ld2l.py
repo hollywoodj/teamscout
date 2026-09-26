@@ -1,4 +1,4 @@
-"""Scrape LD2L signups from ld2l.org.
+"""Scrape LD2L signups and the weekly schedule from ld2l.org.
 
 The signup table carries structured data attributes on each <tr>:
   data-steamid (steam64), data-linear (listed MMR), data-captain (0=no/1=yes/2=maybe),
@@ -8,7 +8,10 @@ Position prefs are 1-5 ratings where 1 = most preferred (ties allowed).
 Player name lives in the hovercard div's data-title; statement is the last <td>.
 """
 
+import json
+import os
 import re
+import time
 from html import unescape
 from html.parser import HTMLParser
 
@@ -168,3 +171,121 @@ def scrape_signups(season_id):
     print(f"  ✅ Found {len(unique)} players ({season_label}) — "
           f"captains: {caps_y} yes / {caps_m} maybe")
     return season_label, unique
+
+
+_WEEK_HEADING = re.compile(r"<h3>\s*Week\s+(\d+)\s*</h3>", re.I)
+_SERIES_ROW = re.compile(r'<tr class="clickable"[^>]*>(.*?)</tr>', re.S)
+_SCHEDULE_TEAM = re.compile(r'href="/teams/about/(\d+)">([^<]*)</a>')
+_SERIES_SCORE = re.compile(r"<td[^>]*>\s*(\d+\s*-\s*\d+)\s*</td>")
+
+
+def parse_schedule(html):
+    """Every posted week on /schedule/{season}: [{week, series: [...]}].
+
+    Each series is {homeId, home, awayId, away, score}. The site lists the
+    newest week first; callers pick by week number, not position.
+    """
+    html = html or ""
+    headings = list(_WEEK_HEADING.finditer(html))
+    weeks = []
+    for index, heading in enumerate(headings):
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(html)
+        series = []
+        for row in _SERIES_ROW.findall(html[heading.end():end]):
+            teams = _SCHEDULE_TEAM.findall(row)
+            if len(teams) != 2:
+                continue
+            score = _SERIES_SCORE.search(row)
+            series.append({
+                "homeId": teams[0][0],
+                "home": unescape(teams[0][1]).strip(),
+                "awayId": teams[1][0],
+                "away": unescape(teams[1][1]).strip(),
+                "score": re.sub(r"\s+", " ", score.group(1)) if score else "",
+            })
+        if series:
+            weeks.append({"week": int(heading.group(1)), "series": series})
+    return weeks
+
+
+def current_week(weeks):
+    """The newest posted week: this week's opponent, played or not."""
+    return max(weeks, key=lambda row: row["week"]) if weeks else None
+
+
+def _schedule_cache_path(path=None):
+    if path:
+        return path
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(root, config.LD2L_SCHEDULE_CACHE_FILE)
+
+
+def _read_json(path):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _write_json(path, data):
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(directory, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(data, handle)
+    os.replace(tmp, path)
+
+
+def fetch_schedule(season_id):
+    url = f"{config.LD2L_BASE}/schedule/{season_id}"
+    r = requests.get(url, timeout=25, headers={"User-Agent": "ld2l-scout/2.0"})
+    r.raise_for_status()
+    week = current_week(parse_schedule(r.text))
+    return {
+        "seasonId": season_id,
+        "week": week["week"] if week else None,
+        "series": week["series"] if week else [],
+        "fetchedAt": int(time.time()),
+    }
+
+
+def load_schedule(season_id, path=None, force=False):
+    """This week's LD2L series, cached for LD2L_SCHEDULE_CACHE_HOURS.
+
+    A failed fetch keeps the previous cache; no cache and no network returns
+    None so callers fall back to BBC's posted matchups.
+    """
+    path = _schedule_cache_path(path)
+    cached = _read_json(path)
+    if cached and cached.get("seasonId") != season_id:
+        cached = None
+    if cached and not force:
+        try:
+            age = time.time() - float(cached.get("fetchedAt") or 0)
+        except (TypeError, ValueError):
+            age = float("inf")
+        if age < config.LD2L_SCHEDULE_CACHE_HOURS * 3600:
+            return cached
+    try:
+        data = fetch_schedule(season_id)
+    except (requests.RequestException, OSError, ValueError) as exc:
+        print(f"  ⚠ LD2L schedule fetch failed: {exc}", flush=True)
+        return cached
+    if not data["series"] and cached and cached.get("series"):
+        return cached  # an empty page is a site hiccup, not a cleared week
+    try:
+        _write_json(path, data)
+    except OSError as exc:
+        print(f"  ⚠ LD2L schedule cache write failed: {exc}", flush=True)
+    return data
+
+
+def refresh_schedule_if_new_week(season_id, path=None):
+    """Refetch the schedule; True when this week's series changed."""
+    before = _read_json(_schedule_cache_path(path)) or {}
+    after = load_schedule(season_id, path=path, force=True) or {}
+    key = lambda data: (data.get("week"), [(row.get("homeId"), row.get("awayId"))
+                                          for row in data.get("series") or []])
+    return bool(after.get("series")) and key(before) != key(after)

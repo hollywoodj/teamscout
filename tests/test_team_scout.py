@@ -1561,3 +1561,12 @@ def test_refresh_pub_sections_failure_keeps_last_good_copy(tmp_path):
     doc_path.write_text(json.dumps(doc), encoding="utf-8")
     refresh_pub_sections(_SectionOD(fail=True), cache, 7)
     assert cache.get_section(7, MATCHES_SECTION, None) == [{"match_id": 9, "start_time": 1}]
+
+
+def test_render_page_auto_sets_this_weeks_opponent():
+    page = render_page({"seasonId": 53, "players": [], "patches": [], "teams": []})
+    assert "function weekFixture(key)" in page
+    assert "function autoOpponent(force)" in page
+    # boot, league switch, and loading My Team all re-point the opponent
+    assert page.count("autoOpponent(") >= 4
+    assert "if(side==='mine')autoOpponent(true)" in page

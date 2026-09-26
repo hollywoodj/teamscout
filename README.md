@@ -130,6 +130,8 @@ To pick up a fresh scout run: `Stop-ScheduledTask -TaskName 'Team Scout'; Start-
 
 The always-on process also watches BBC's `feed.json` and match cache. When a new week is posted, Team Scout rebuilds itself within about 20 seconds. This week's series is on the **Teams** page; click a row to open that matchup.
 
+**Opponents set themselves.** This week's series come straight from the league sites: LD2L from the newest week on `ld2l.org/schedule/<season>`, RD2L from the division's matchups page on rd2l.gg. BBC's posted matchups are only the fallback when ld2l.org is unreachable and nothing is cached. The always-on process rechecks both sites every 30 minutes (`TEAMSCOUT_SCHEDULE_POLL_MINUTES`) and rebuilds when a new week appears. When My Team is set (a team sign-in, or loading a team into My Team), the Opponent side becomes that week's opponent. It does this once per week: pick a different opponent by hand and it stays until the next week is posted.
+
 Manual `python ld2l_scout.py --teamscout` still opens a browser; the always-on task uses `--no-browser`.
 
 ## Scout Bot

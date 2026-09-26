@@ -6,6 +6,8 @@ import os
 LD2L_BASE = "https://ld2l.org"
 DEFAULT_SEASON_ID = 53  # Season 22 (ld2l.org internal season id)
 STEAM64_OFFSET = 76561197960265728  # Steam64 - this = Steam32
+LD2L_SCHEDULE_CACHE_FILE = "ld2l_schedule.json"  # this week's series (/schedule/{id})
+LD2L_SCHEDULE_CACHE_HOURS = 1
 
 # ---- OpenDota API ----
 API_BASE = "https://api.opendota.com/api"
@@ -256,6 +258,7 @@ TEAMSCOUT_PORT = 8324
 TEAMSCOUT_PATCH_TTL_HOURS = 6
 TEAMSCOUT_OVERRIDES_FILE = "teamscout_overrides.json"  # pulled players + roster edits
 TEAMSCOUT_BBC_POLL_SECONDS = 20  # reload when BBC feed/match cache changes
+TEAMSCOUT_SCHEDULE_POLL_MINUTES = 30  # recheck ld2l.org / rd2l.gg for a new week
 # --auto-refresh (the always-on service): background OpenDota refresh. Sized for
 # the free tier (no API key): roughly 1,000 calls/day across ~185 players.
 TEAMSCOUT_REFRESH_HOURS = 12

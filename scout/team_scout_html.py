@@ -391,9 +391,10 @@ const allowedViews=["team","opponent","recon","matchup","standings","league"];
 if(ACCOUNT.admin)allowedViews.push("admin");else{const adminBtn=document.querySelector("[data-view=admin]");if(adminBtn)adminBtn.remove()}
 const boot=(()=>{const subPane=v=>v==="draft"||v==="results"||v==="roles"?v:"players";let view=saved.view,sub={mine:subPane(saved.sub&&saved.sub.mine),enemy:subPane(saved.sub&&saved.sub.enemy)};if(view==="results"){const onEnemy=!!(saved.resultsTeam&&saved.resultsTeam===saved.enemyTeamKey);view=onEnemy?"opponent":"team";sub[onEnemy?"enemy":"mine"]="results"}else if(view==="player"){const id=saved.focusPlayer||saved.focusEnemy||saved.focusMine;view=(saved.enemy||[]).includes(id)?"opponent":"team"}if(!view)view="team";else if(!allowedViews.includes(view))view="team";return {view,sub}})();
 const playerPane=v=>v==="wards"||v==="pubs"||v==="officials"||v==="standins"||v==="heroes"||v==="esports"?v:"overview";
-const state={view:boot.view,window:saved.window||"current",mine:(saved.mine||[]).filter(id=>byId.has(id)).slice(0,5),enemy:(saved.enemy||[]).filter(id=>byId.has(id)).slice(0,5),mineName:saved.mineName||"My Team",enemyName:saved.enemyName||"Opponent",minePreset:"",enemyPreset:"",focusMine:saved.focusMine||null,focusEnemy:saved.focusEnemy||null,focusPlayer:saved.focusPlayer||saved.focusMine||saved.focusEnemy||null,mineTeamKey:saved.mineTeamKey||null,enemyTeamKey:saved.enemyTeamKey||null,resultsTeam:saved.resultsTeam||null,resultsPlayer:{mine:(saved.resultsPlayer&&saved.resultsPlayer.mine)||null,enemy:(saved.resultsPlayer&&saved.resultsPlayer.enemy)||null},sub:boot.sub,playerSub:{mine:playerPane(saved.playerSub&&saved.playerSub.mine),enemy:playerPane(saved.playerSub&&saved.playerSub.enemy)},wardStyle:saved.wardStyle==="heat"?"heat":"dots",editing:{mine:!!(saved.editing&&saved.editing.mine),enemy:!!(saved.editing&&saved.editing.enemy)},pendingStandin:null};
+const state={view:boot.view,window:saved.window||"current",mine:(saved.mine||[]).filter(id=>byId.has(id)).slice(0,5),enemy:(saved.enemy||[]).filter(id=>byId.has(id)).slice(0,5),mineName:saved.mineName||"My Team",enemyName:saved.enemyName||"Opponent",minePreset:"",enemyPreset:"",focusMine:saved.focusMine||null,focusEnemy:saved.focusEnemy||null,focusPlayer:saved.focusPlayer||saved.focusMine||saved.focusEnemy||null,mineTeamKey:saved.mineTeamKey||null,enemyTeamKey:saved.enemyTeamKey||null,resultsTeam:saved.resultsTeam||null,resultsPlayer:{mine:(saved.resultsPlayer&&saved.resultsPlayer.mine)||null,enemy:(saved.resultsPlayer&&saved.resultsPlayer.enemy)||null},sub:boot.sub,playerSub:{mine:playerPane(saved.playerSub&&saved.playerSub.mine),enemy:playerPane(saved.playerSub&&saved.playerSub.enemy)},wardStyle:saved.wardStyle==="heat"?"heat":"dots",editing:{mine:!!(saved.editing&&saved.editing.mine),enemy:!!(saved.editing&&saved.editing.enemy)},pendingStandin:null,autoFixture:saved.autoFixture||null};
 if(ACCOUNT.locked&&ACCOUNT.teamKey){const lockedTeam=(DATA.teams||[]).find(t=>t.key===ACCOUNT.teamKey);if(lockedTeam){state.mine=activeRoster(lockedTeam,state.enemy);state.mineName=lockedTeam.name||lockedTeam.short||ACCOUNT.team||"My Team";state.mineTeamKey=lockedTeam.key}}
 else ensureDefaultMine();
+autoOpponent();
 const E=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 function cellName(s){let t=String(s??"").replace(/_/g," ").replace(/[^\p{L}\p{N} ]+/gu,"").replace(/\s+/g," ").trim();if(!t)return t;if(t===t.toUpperCase())return t;return t.replace(/([\p{Ll}\p{N}])(\p{Lu})/gu,"$1 $2")}
 function teamKey(name){let s=String(name||"").trim().toLowerCase();s=s.replace(/^the\s+/,"");return s.replace(/[^a-z0-9]+/g,"")}
@@ -421,6 +422,24 @@ function ensureDefaultMine(){
   state.mine=activeRoster(team,state.enemy||[]);
   state.mineName=team.name||team.short||signin.team||"My Team";
   state.mineTeamKey=team.key;
+}
+// This week's posted series for a team. The id changes each week, so a new
+// week re-points the Opponent side once, while a manual pick sticks until then.
+function weekFixture(key){
+  if(!key)return null;
+  const m=(DATA.matchups||[]).find(x=>x.aKey===key||x.bKey===key);
+  if(!m)return null;
+  return {id:`${leagueId(m.league)||activeLeague}:${m.week||""}:${[m.aKey,m.bKey].sort().join("-")}`,opp:m.aKey===key?m.bKey:m.aKey};
+}
+function autoOpponent(force){
+  const f=weekFixture(sideLoadedKey("mine"));
+  if(!f||(!force&&state.autoFixture===f.id))return;
+  state.autoFixture=f.id;
+  const t=teamByKey(f.opp);
+  if(t&&!(state.enemy.length&&sideLoadedKey("enemy")===t.key)){
+    state.enemy=activeRoster(t,state.mine);state.enemyName=t.name||t.short;state.enemyTeamKey=t.key;state.focusEnemy=null;
+  }
+  persist();
 }
 function paintLeagueSwitch(){
   const el=document.querySelector("#leagueSwitch");
@@ -459,8 +478,10 @@ function applySaved(saved){
   state.wardStyle=saved.wardStyle==="heat"?"heat":"dots";
   state.editing={mine:!!(saved.editing&&saved.editing.mine),enemy:!!(saved.editing&&saved.editing.enemy)};
   state.pendingStandin=null;
+  state.autoFixture=saved.autoFixture||null;
   if(ACCOUNT.locked&&ACCOUNT.teamKey){const lockedTeam=(DATA.teams||[]).find(t=>t.key===ACCOUNT.teamKey);if(lockedTeam){state.mine=activeRoster(lockedTeam,state.enemy);state.mineName=lockedTeam.name||lockedTeam.short||ACCOUNT.team||"My Team";state.mineTeamKey=lockedTeam.key}}
   else ensureDefaultMine();
+  autoOpponent();
 }
 function switchLeague(league){
   if(!leagueIds.includes(league)||league===activeLeague)return;
@@ -1061,7 +1082,8 @@ function standingsPage(){
   const rows=DATA.standings||[];
   const fallback=DATA.officialSource&&DATA.officialSource.league;
   const leagues=leaguesOf(rows, fallback);
-  const week=DATA.officialSource&&DATA.officialSource.week;
+  const slateWeek=slate=>((slate||[]).find(m=>m.week)||{}).week;
+  const week=slateWeek(DATA.matchups)||(DATA.officialSource&&DATA.officialSource.week);
   const heading=week?`Week ${week} matchups`:"This week's matchups";
   if(leagues.length<2){
     return `<div class="singlePage">${matchupSlate(DATA.matchups||[], heading)}${standingsTable(rows)}</div>`;
@@ -1069,7 +1091,7 @@ function standingsPage(){
   const blocks=leagues.map(league=>{
     const group=rows.filter(r=>(r.league||fallback)===league);
     const slate=(DATA.matchups||[]).filter(m=>(m.league||fallback)===league);
-    return `<div class="contentBlock"><h2>${E(league)}</h2>${matchupSlate(slate, "This week's matchups")}${standingsTable(group)}</div>`;
+    return `<div class="contentBlock"><h2>${E(league)}</h2>${matchupSlate(slate, slateWeek(slate)?`Week ${slateWeek(slate)} matchups`:"This week's matchups")}${standingsTable(group)}</div>`;
   }).join("");
   return `<div class="singlePage">${blocks}</div>`;
 }
@@ -1791,7 +1813,7 @@ const pages={team:()=>teamPage('mine'),opponent:()=>teamPage('enemy'),recon:reco
 function bindSeriesWardFolds(){document.querySelectorAll(".seriesCard .wardFold").forEach(d=>d.ontoggle=()=>{const card=d.closest(".seriesCard");if(!card||d._sync)return;card.querySelectorAll(".wardFold").forEach(o=>{if(o===d||o.open===d.open)return;o._sync=1;o.open=d.open;o._sync=0})})}
 function bindWardStyle(){document.querySelectorAll("[data-ward-style]").forEach(b=>b.onclick=e=>{e.preventDefault();e.stopPropagation();const next=b.dataset.wardStyle==="heat"?"heat":"dots";if(state.wardStyle===next)return;state.wardStyle=next;persist();render()})}
 function render(){wardHeatJobs=[];document.querySelectorAll(".nav button").forEach(b=>b.classList.toggle("on",b.dataset.view===state.view));const ws=document.querySelector("#workspace");ws.classList.toggle("enemyView",state.view==="opponent"||state.view==="recon");ws.innerHTML=pages[state.view]();bind()}
-function bind(){bindSeriesWardFolds();bindWardStyle();paintWardHeats();document.querySelectorAll("[data-window]").forEach(s=>s.onchange=()=>{state.window=s.value;persist();render()});document.querySelectorAll("[data-team-choice]").forEach(s=>s.onchange=()=>{const side=s.dataset.teamChoice;state[side+'Preset']=s.value;const button=document.querySelector(`[data-load-team="${side}"]`);if(button)button.disabled=s.value===''});document.querySelectorAll("[data-load-team]").forEach(b=>b.onclick=()=>{const side=b.dataset.loadTeam;if(side==="mine"&&ACCOUNT.locked)return;const index=state[side+'Preset'],t=DATA.teams[Number(index)];if(index===''||!t)return;const other=side==='mine'?'enemy':'mine';state[side]=activeRoster(t,state[other]);state[side+'Name']=t.name||t.short;state[side+'TeamKey']=t.key;state[side==='mine'?'focusMine':'focusEnemy']=null;state[side+'Preset']='';state.pendingStandin=null;persist();render()});document.querySelectorAll("[data-remove]").forEach(b=>b.onclick=(e)=>{e.stopPropagation();const [side,id]=b.dataset.remove.split(":");state[side]=state[side].filter(x=>x!==Number(id));state.pendingStandin=null;persist();render()});document.querySelectorAll("[data-name]").forEach(i=>i.onchange=()=>{state[i.dataset.name+"Name"]=i.value.trim()||(i.dataset.name==='mine'?'My Team':'Opponent');persist();render()});document.querySelectorAll("[data-focus]").forEach(b=>b.onclick=()=>{const [side,id]=b.dataset.focus.split(":");state[side==='mine'?'focusMine':'focusEnemy']=Number(id);state.focusPlayer=Number(id);state.sub=state.sub||{mine:"players",enemy:"players"};state.sub[side]="players";persist();render()});
+function bind(){bindSeriesWardFolds();bindWardStyle();paintWardHeats();document.querySelectorAll("[data-window]").forEach(s=>s.onchange=()=>{state.window=s.value;persist();render()});document.querySelectorAll("[data-team-choice]").forEach(s=>s.onchange=()=>{const side=s.dataset.teamChoice;state[side+'Preset']=s.value;const button=document.querySelector(`[data-load-team="${side}"]`);if(button)button.disabled=s.value===''});document.querySelectorAll("[data-load-team]").forEach(b=>b.onclick=()=>{const side=b.dataset.loadTeam;if(side==="mine"&&ACCOUNT.locked)return;const index=state[side+'Preset'],t=DATA.teams[Number(index)];if(index===''||!t)return;const other=side==='mine'?'enemy':'mine';state[side]=activeRoster(t,state[other]);state[side+'Name']=t.name||t.short;state[side+'TeamKey']=t.key;state[side==='mine'?'focusMine':'focusEnemy']=null;state[side+'Preset']='';state.pendingStandin=null;if(side==='mine')autoOpponent(true);persist();render()});document.querySelectorAll("[data-remove]").forEach(b=>b.onclick=(e)=>{e.stopPropagation();const [side,id]=b.dataset.remove.split(":");state[side]=state[side].filter(x=>x!==Number(id));state.pendingStandin=null;persist();render()});document.querySelectorAll("[data-name]").forEach(i=>i.onchange=()=>{state[i.dataset.name+"Name"]=i.value.trim()||(i.dataset.name==='mine'?'My Team':'Opponent');persist();render()});document.querySelectorAll("[data-focus]").forEach(b=>b.onclick=()=>{const [side,id]=b.dataset.focus.split(":");state[side==='mine'?'focusMine':'focusEnemy']=Number(id);state.focusPlayer=Number(id);state.sub=state.sub||{mine:"players",enemy:"players"};state.sub[side]="players";persist();render()});
 document.querySelectorAll("[data-team-sub]").forEach(b=>b.onclick=()=>{const [side,pane]=b.dataset.teamSub.split(":");state.sub=state.sub||{mine:"players",enemy:"players"};state.sub[side]=pane;persist();render()});
 document.querySelectorAll("[data-results-player]").forEach(b=>b.onclick=()=>{const [side,idStr]=b.dataset.resultsPlayer.split(":");state.resultsPlayer=state.resultsPlayer||{mine:null,enemy:null};const id=idStr?Number(idStr):null;state.resultsPlayer[side]=id&&state.resultsPlayer[side]===id?null:id;persist();render()});
 document.querySelectorAll("[data-player-sub]").forEach(b=>b.onclick=()=>{const [side,pane]=b.dataset.playerSub.split(":");state.playerSub=state.playerSub||{mine:"overview",enemy:"overview"};state.playerSub[side]=pane;persist();render()});

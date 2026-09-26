@@ -4,6 +4,7 @@ from scout.bbc_source import index_official_matches
 from scout.rd2l_source import (
     load_rd2l_matches,
     match_ids,
+    parse_matchup_week,
     parse_matchups,
     parse_rd2l,
     parse_roster_page,
@@ -31,6 +32,7 @@ STANDINGS_HTML = """
 """
 
 MATCHUPS_HTML = """
+<title>RD2L : Season 39 Week 3 Matchups</title>
 <table><thead><tr><th>Home Team</th><th>Away Team</th></tr></thead><tbody>
 <tr><td><a href="/seasons/S/divisions/D/teams/abc">Jiggy</a><span> (Jiggy)</span></td><td><a href="/seasons/S/divisions/D/teams/def">Ducks</a><span> (Duck)</span></td></tr>
 </tbody></table>
@@ -87,6 +89,8 @@ def test_parse_rd2l_labels_the_league():
     assert data["matchups"][0]["aKey"] == "jiggy"
     assert data["matchups"][0]["bKey"] == "ducks"
     assert data["matchups"][0]["league"] == data["league"]
+    assert data["matchups"][0]["week"] == 3
+    assert data["week"] == 3
     assert {row["key"] for row in data["standings"]} == {"jiggy", "ducks"}
 
 
@@ -160,3 +164,8 @@ def test_load_rd2l_matches_skips_ids_already_cached(tmp_path):
     again = load_rd2l_matches(rd2l, fetcher=fetcher, path=str(path))
     assert calls == [43]
     assert set(again) == {42, 43}
+
+
+def test_parse_matchup_week_reads_the_title():
+    assert parse_matchup_week(MATCHUPS_HTML) == 3
+    assert parse_matchup_week("<title>RD2L</title>") is None
