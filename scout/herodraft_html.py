@@ -264,6 +264,13 @@ body.drafting h1, body.drafting .sub{display:none}
 .sc .scr{color:var(--ink-dim); font-size:10px; line-height:1.35}
 .sc .und{color:#F3D06B; font-weight:600}
 .sc.taken{opacity:.35}
+.mt.C{color:#7FC8E8; border-color:#2F6A85}
+.cv{padding:4px 3px; font-size:11px; color:var(--ink-dim); line-height:1.4}
+.cv a{color:var(--ink); text-decoration:none}
+.cv a:hover{color:var(--ink-hi); text-decoration:underline}
+.cv .cvwho{color:#7FC8E8; font-weight:600; letter-spacing:.06em}
+.cv .cvh{display:flex; flex-wrap:wrap; gap:3px; margin-top:2px}
+.cv .cvh img{width:30px; height:17px; object-fit:cover; border:1px solid var(--rule)}
 .sc h4{font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-dim);
   margin:6px 0 2px; font-weight:600}
 .schead{font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-dim);
@@ -499,6 +506,9 @@ body.burning .clock.reserve{animation:ticktock 1s steps(1) infinite}
         </div>
         <div class="panelbox"><h3>Scouting report</h3><div id="suggBox">
           <div class="hintlite">Hints appear on your turn.</div>
+        </div></div>
+        <div class="panelbox"><h3>Creator watch</h3><div id="creatorBox">
+          <div class="hintlite">No recent creator videos cached — run <code>python ld2l_scout.py --refresh-creators</code>.</div>
         </div></div>
         <div class="panelbox"><h3>Official records</h3><div id="scoutBox">
           <div class="hintlite">Their most successful league heroes appear here once the draft starts.</div>
@@ -1007,14 +1017,18 @@ function syncGrid(){
     t.classList.toggle("sugg", hintsOn && suggs.has(hid) && !taken.has(hid));
     t.classList.toggle("dim", !!heroQuery && !hname(hid).toLowerCase().includes(heroQuery));
     const rb = document.getElementById("rb" + hid);
-    const tier = ST && ST.meta_tags ? ST.meta_tags[hid] : null;
+    const mtag = ST && ST.meta_tags ? ST.meta_tags[hid] : null;
+    const tier = mtag ? mtag.tier : "";
+    const creators = mtag && mtag.creators ? mtag.creators : [];
     const mb = document.getElementById("mb" + hid);
     if (mb){
-      const showMeta = hintsOn && tier && tier !== "B" && !taken.has(hid);
+      const label = tier && tier !== "B" ? tier : (creators.length ? creators[0].slice(0, 3).toUpperCase() : "");
+      const showMeta = hintsOn && !!label && !taken.has(hid);
       mb.style.display = showMeta ? "block" : "none";
-      if (showMeta){ mb.textContent = tier; mb.className = "mb " + tier; }
+      if (showMeta){ mb.textContent = label; mb.className = "mb " + (tier && tier !== "B" ? tier : "A"); }
     }
-    const metaTitle = tier ? " · meta " + tier : "";
+    const metaTitle = (tier ? " · meta " + tier : "") +
+      (creators.length ? " · " + creators.join(", ") : "");
     if (hintsOn && ratings && ratings[hid] !== undefined && !taken.has(hid)){
       const v = ratings[hid];
       rb.style.display = "block";
@@ -1293,7 +1307,7 @@ function partsLine(p){
   if (p.v) bits.push("vs " + rtText(p.v));
   if (p.w) bits.push("with " + rtText(p.w));
   if (p.r) bits.push("role " + rtText(p.r));
-  if (p.m) bits.push("meta " + rtText(p.m));
+  if (p.m) bits.push("meta " + rtText(p.m) + (p.creators && p.creators.length ? " (" + p.creators.join(", ") + ")" : ""));
   if (p.self) bits.push("(−" + p.self.toFixed(1) + ": you want it too — pick it)");
   return bits.join(" · ");
 }
@@ -1313,6 +1327,7 @@ function renderSuggs(){
     d.innerHTML = '<div class="srt ' + rtClass(x.rating) + '">' + rtText(x.rating) +
       '</div>' + img(x.hid) + '<div><div class="snm">' + esc(hname(x.hid)) +
       (x.parts && x.parts.tier ? '<span class="mt ' + x.parts.tier + '">META ' + x.parts.tier + '</span>' : '') +
+      (x.parts && x.parts.creators && x.parts.creators.length ? '<span class="mt C">' + esc(x.parts.creators.join(" · ")) + '</span>' : '') +
       '</div><div class="swhy">' + partsLine(x.parts) +
       (x.why ? '<br>' + esc(x.why) : '') + '</div></div>';
     d.onclick = () => { selectHero(x.hid); window.scrollTo({top:0}); };
@@ -1345,6 +1360,19 @@ function renderScout(){
     });
   });
   box.innerHTML = out || '<div class="hintlite">No official draft history for these teams yet.</div>';
+}
+function renderCreators(){
+  const box = document.getElementById("creatorBox");
+  if (!box || !ST) return;
+  const vids = ST.creator_videos || [];
+  if (!vids.length) return;   // keep the "run --refresh-creators" note
+  box.innerHTML = vids.map(v =>
+    '<div class="cv"><span class="cvwho">' + esc(v.who) + '</span> · ' + esc(v.date || "") +
+    '<br><a href="' + esc(v.url) + '" target="_blank" rel="noopener">' + esc(v.title) + '</a>' +
+    (v.heroes && v.heroes.length ? '<div class="cvh">' + v.heroes.map(h =>
+      '<span title="' + esc(hname(h)) + '">' + img(h) + '</span>').join("") + '</div>'
+      : '<div>no heroes read from the description — fill them in meta_creators.json</div>') +
+    '</div>').join("");
 }
 function renderSubLine(){
   const el = document.getElementById("subLine");
@@ -1451,7 +1479,7 @@ async function poll(){
   if (drafting){
     if (ST.turn && !ST.turn.is_me) selectedHid = null;
     renderTeamCards(); renderMeter(); renderDraftPanel();
-    renderTurn(); renderSuggs(); renderScout();
+    renderTurn(); renderSuggs(); renderScout(); renderCreators();
     syncGrid(); renderSummary();
   }
   renderSubLine();

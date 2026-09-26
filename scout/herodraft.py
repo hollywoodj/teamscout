@@ -42,6 +42,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from . import config
 from .analysis import is_organized_match
 from .cache import Cache
+from .creators import creator_signal, creator_value, refresh_creators
 from .fetch import fetch_player_sections, players_from_snapshot
 from .hero_positions import POS_WEIGHTS, affinity
 from .heroes import HERO_FALLBACK
@@ -526,19 +527,22 @@ def load_league_context(od, cache, profiles, rows, offline=True):
 META_HEROES_FILE = os.path.join(os.path.dirname(__file__), "meta_heroes.json")
 
 
-def load_meta_heroes(heroes, path=None):
-    """{patch, updated, sources, heroes: {hid: {tier, pos, note}}}.
+def load_meta_heroes(heroes, path=None, creators=None):
+    """{patch, updated, sources, heroes: {hid: {tier, pos, note, creators}}}.
 
     Names are resolved against the live hero map first, then the bundled
-    fallback names, so a Valve rename doesn't silently drop a hero."""
+    fallback names, so a Valve rename doesn't silently drop a hero.
+    `creators` is creators.creator_signal()'s {hero name: [video rows]}; a
+    hero named only by creators still gets a tag (tier "") so it is on the
+    bot's radar and carries the video reference in the hints."""
     empty = {"patch": "", "updated": "", "sources": [], "heroes": {}}
     try:
         with open(path or META_HEROES_FILE, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
-        return empty
+        data = {}
     if not isinstance(data, dict):
-        return empty
+        data = {}
     by_name = {}
     for hid, h in (heroes or {}).items():
         name = h.get("n") if isinstance(h, dict) else h
@@ -563,7 +567,19 @@ def load_meta_heroes(heroes, path=None):
             if 1 <= p <= 5:
                 pos.append(p)
         tags[hid] = {"tier": tier, "pos": pos,
-                     "note": str(info.get("note") or "")[:160]}
+                     "note": str(info.get("note") or "")[:160], "creators": []}
+    for name, rows in (creators or {}).items():
+        hid = by_name.get(str(name).casefold())
+        if hid is None or not rows:
+            continue
+        tag = tags.setdefault(hid, {"tier": "", "pos": [], "note": "", "creators": []})
+        tag["creators"] = [dict(r) for r in rows]
+        for r in rows:
+            for p in r.get("pos") or []:
+                if p not in tag["pos"]:
+                    tag["pos"].append(p)
+    if not tags:
+        return empty
     return {"patch": str(data.get("patch") or "")[:16],
             "updated": str(data.get("updated") or "")[:32],
             "sources": [str(x) for x in (data.get("sources") or [])],
@@ -571,10 +587,38 @@ def load_meta_heroes(heroes, path=None):
 
 
 def meta_value(tags, hid):
+    """Curated tier value plus the creator-video credit."""
     info = (tags or {}).get(hid)
     if not info:
         return 0.0
-    return config.HERODRAFT_META_TIER_VALUE.get(info.get("tier"), 0.0)
+    return round(config.HERODRAFT_META_TIER_VALUE.get(info.get("tier"), 0.0)
+                 + creator_value(info.get("creators")), 2)
+
+
+def creator_names(tags, hid):
+    info = (tags or {}).get(hid) or {}
+    seen = []
+    for r in info.get("creators") or []:
+        who = r.get("who")
+        if who and who not in seen:
+            seen.append(who)
+    return seen
+
+
+def creator_videos(tags, limit=10):
+    """Recent creator videos across all tagged heroes, newest first, for the
+    hints drawer: [{who, title, date, url, heroes: [hid...]}]."""
+    by_key = {}
+    for hid, info in (tags or {}).items():
+        for r in info.get("creators") or []:
+            key = r.get("url") or r.get("title")
+            row = by_key.setdefault(key, {"who": r.get("who"), "title": r.get("title"),
+                                          "date": r.get("date"), "url": r.get("url"),
+                                          "heroes": []})
+            if hid not in row["heroes"]:
+                row["heroes"].append(hid)
+    rows = sorted(by_key.values(), key=lambda r: r.get("date") or "", reverse=True)
+    return rows[:limit]
 
 
 def role_coverage(picks):
@@ -723,10 +767,32 @@ def load_meta(offline=False, heroes=None):
     top_meta = [h for h, _ in sorted(((int(k), v["g"]) for k, v in stats.items()),
                                      key=lambda x: -x[1])[:config.HERODRAFT_TOP_META]]
     syn = _coverage_synergy(adv, top_meta) if adv else {}
-    curated = load_meta_heroes(heroes or {})
+    names = [h.get("n") for h in (heroes or {}).values() if isinstance(h, dict)]
+    if not offline and cache.get_blob(
+            "creator_videos", max_age_hours=config.HERODRAFT_CREATOR_TTL_HOURS) is None:
+        print("  🎥 Refreshing creator meta videos (BSJ, Speeed...)")
+        try:
+            print(f"    {refresh_creators(cache, names)}")
+        except Exception as exc:  # feeds are optional
+            print(f"  ⚠ creator refresh failed: {exc}")
+    signal = creator_signal(cache, names) if names else {}
+    curated = load_meta_heroes(heroes or {}, creators=signal)
     return {"base": base, "adv": adv, "syn": syn,
             "tags": curated["heroes"], "patch": curated["patch"],
-            "meta_updated": curated["updated"]}
+            "meta_updated": curated["updated"],
+            "videos": creator_videos(curated["heroes"])}
+
+
+def reload_meta_tags(meta, heroes):
+    """Re-read the curated file + the creator cache into an existing meta dict
+    (offline; used when the creator cache is refreshed by another pass)."""
+    names = [h.get("n") for h in (heroes or {}).values() if isinstance(h, dict)]
+    signal = creator_signal(Cache(), names) if names else {}
+    curated = load_meta_heroes(heroes or {}, creators=signal)
+    meta["tags"] = curated["heroes"]
+    meta["patch"] = curated["patch"]
+    meta["videos"] = creator_videos(curated["heroes"])
+    return meta
 
 
 # --------------------------------------------------------------------------
@@ -1134,7 +1200,8 @@ class DraftState:
         return {"total": round(total, 2), "c": round(comfort, 2),
                 "p": round(patch, 2), "v": round(vs, 2), "w": round(wth, 2),
                 "s": round(scout, 2), "r": round(role, 2), "m": round(meta, 2),
-                "tier": tag["tier"] if tag else None,
+                "tier": (tag["tier"] or None) if tag else None,
+                "creators": creator_names(self.meta.get("tags"), hid),
                 "base": base, "who": who}
 
     def win_probability(self):
@@ -1196,7 +1263,7 @@ class DraftState:
                     hids.update(ban_book["bans"])
             # key meta heroes are always on the table, comfort or not
             hids.update(h for h, t in (self.meta.get("tags") or {}).items()
-                        if t.get("tier") in ("S", "A"))
+                        if t.get("tier") in ("S", "A") or t.get("creators"))
             cands = []
             for hid in hids:
                 if hid in self.taken or hid not in self.heroes:
@@ -1277,8 +1344,8 @@ class DraftState:
         return [{"hid": h, "rating": r["total"],
                  "parts": {"c": r["c"], "p": r["p"], "v": r["v"], "w": r["w"],
                            "s": r["s"], "r": r["r"], "m": r["m"],
-                           "tier": r.get("tier"), "base": r["base"],
-                           "self": r.get("self_discount")},
+                           "tier": r.get("tier"), "creators": r.get("creators") or [],
+                           "base": r["base"], "self": r.get("self_discount")},
                  "why": r["who"]} for h, r in cands]
 
     def _build_summary(self):
@@ -1340,8 +1407,10 @@ class DraftState:
                             if turn and turn["is_me"] else None),
                 "has_meta": bool(self.meta["base"] or self.meta["adv"]),
                 "meta_patch": self.meta.get("patch") or "",
-                "meta_tags": {str(h): t["tier"]
+                "meta_tags": {str(h): {"tier": t.get("tier") or "",
+                                       "creators": creator_names(self.meta.get("tags"), h)}
                               for h, t in (self.meta.get("tags") or {}).items()},
+                "creator_videos": self.meta.get("videos") or [],
                 "scout_cards": self.scout_cards,
                 "league_teams": self.league_teams,
                 "mine_key": self.my_team_key,
@@ -1386,16 +1455,25 @@ def _resolve_sound_path(filename):
     return path, SOUND_EXTS[ext]
 
 
+def _file_stamp(path):
+    try:
+        info = os.stat(path)
+        return (info.st_mtime_ns, info.st_size)
+    except OSError:
+        return (0, 0)
+
+
 def _league_stamp():
     """Identity of the Team Scout inputs the league context is built from."""
     from .bbc_source import bbc_source_stamp
     from .overrides import overrides_path
-    try:
-        info = os.stat(overrides_path())
-        ov = (info.st_mtime_ns, info.st_size)
-    except OSError:
-        ov = (0, 0)
-    return (bbc_source_stamp(), ov)
+    return (bbc_source_stamp(), _file_stamp(overrides_path()))
+
+
+def _meta_stamp():
+    """Identity of the offline meta inputs (curated file + creator cache)."""
+    return (_file_stamp(META_HEROES_FILE),
+            _file_stamp(os.path.join(config.CACHE_DIR, "creator_videos.json")))
 
 
 class HeroDraftHub:
@@ -1423,6 +1501,7 @@ class HeroDraftHub:
         self.ready = False
         self.error = None
         self._stamp = None
+        self._meta_stamp = None
         self._stop = threading.Event()
         self._engine = None
 
@@ -1446,6 +1525,7 @@ class HeroDraftHub:
             self.heroes, self.league, self.meta = heroes, league, meta
             self.page = render_page(pool, heroes, label, league["teams"]).encode("utf-8")
             self._stamp = _league_stamp()
+            self._meta_stamp = _meta_stamp()
             self.ready = True
             self.error = None
         if verbose:
@@ -1485,11 +1565,32 @@ class HeroDraftHub:
         if meta.get("tags"):
             print(f"  🗺 Curated meta {meta.get('patch') or '?'}: "
                   f"{len(meta['tags'])} heroes tagged")
+        videos = meta.get("videos") or []
+        if videos:
+            print(f"  🎥 Creator watch: {len(videos)} recent meta videos "
+                  f"({', '.join(sorted({v['who'] for v in videos}))})")
+        else:
+            print("  🎥 Creator watch: no recent videos cached — run "
+                  "python ld2l_scout.py --refresh-creators")
+
+    def refresh_meta_if_changed(self):
+        """Re-read the curated meta + creator videos when either file moved
+        (the auto-refresh pass writes the creator cache)."""
+        if not self.ready:
+            return False
+        stamp = _meta_stamp()
+        if stamp == self._meta_stamp:
+            return False
+        with self._lock:
+            reload_meta_tags(self.meta, self.heroes)   # shared dict: every state sees it
+            self._meta_stamp = stamp
+        return True
 
     def refresh_league_if_changed(self):
         """Rebuild teams/books/official records when Team Scout inputs moved."""
         if not self.ready:
             return False
+        self.refresh_meta_if_changed()
         stamp = _league_stamp()
         if stamp == self._stamp:
             return False

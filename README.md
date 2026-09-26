@@ -36,6 +36,7 @@ python ld2l_scout.py --mock          # practice: local mock auction vs AI captai
 python ld2l_scout.py --mock --me "Hollywood"   # pick your seat (default: Hollywood)
 python ld2l_scout.py --herodraft     # practice: Captains Mode hero draft vs a bot (also the Mock Draft button in Team Scout)
 python ld2l_scout.py --teamscout     # mirror: scout your team against an opponent
+python ld2l_scout.py --refresh-creators  # pull BSJ / Speeed meta videos into the draft bot
 ```
 
 Optional: set `OPENDOTA_API_KEY` for faster/uncapped API access. Without it the
@@ -460,6 +461,21 @@ each, timed-out ban = no ban, timed-out pick = random hero.
   when a new patch lands, edit the file (names as OpenDota spells them) and
   the board picks it up on next start. The hints drawer marks meta heroes
   with an S/A badge and the sub-line shows the patch it was written for.
+- **Creator watch** — what BSJ, Speeed and the like put out this week is
+  treated as a key meta signal. `scout/meta_creators.json` is the watchlist
+  (name, YouTube handle, weight). `python ld2l_scout.py --refresh-creators`
+  pulls each creator's public YouTube RSS feed (no API key), keeps the
+  meta-flavoured uploads ("Top 3 heroes in every role 7.41f", "broken hero",
+  "tier list"...), and reads hero names and positions out of the title and
+  description ("1:10 Carry: Ursa, PL and WK" → Ursa/PL/WK at pos 1). The Team
+  Scout auto-refresh pass and an online `--herodraft` start do this on their
+  own. Every creator that has named a hero recently adds a credit to its
+  rating that decays over 60 days and lapses after 120, on top of the tier;
+  a hero only creators mention still gets on the bot's radar. Hints show a
+  creator badge ("BSJ · Speeed") and the drawer's **Creator watch** panel
+  lists the videos with the heroes read from each. A video whose description
+  names nothing can be filled in by hand in the same file (`videos` entries
+  with `heroes`), and hand entries override what was read.
 - **Bans** rate the hero from the *opponent's* perspective (their comfort,
   their official record, their open seats, how it counters what you already
   hold), plus the bans they themselves repeat. A ban is discounted when *you*
@@ -577,6 +593,8 @@ scout/
   herodraft.py     Captains Mode pick/ban practice vs a bot (--herodraft, and Team Scout's /draft)
   herodraft_html.py  Dota-themed draft board page
   meta_heroes.json curated current-patch meta tiers by position (hand-edited per patch)
+  creators.py      creator meta signal: YouTube RSS -> recent meta videos -> heroes named
+  meta_creators.json  creator watchlist (BSJ, Speeed) + hand-entered videos
   bbc_source.py    read-only current-season team/official adapter for BBC artifacts
   team_scout.py    --teamscout payload builder and localhost server
   team_scout_html.py mirrored team/opponent scouting interface

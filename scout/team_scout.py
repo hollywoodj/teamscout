@@ -960,9 +960,17 @@ def auto_refresh_cycle(season, bbc_root=None, overrides_path=None):
         od, cache, ids, budget=config.TEAMSCOUT_ESPORTS_BUDGET,
         bbc_match_ids=bbc_match_ids, rd2l_matches=rd2l_matches,
     )
+    # creator meta videos for the mock draft: two feed fetches, no OpenDota calls
+    try:
+        from .creators import refresh_creators
+        heroes = load_full_heroes(od, cache, offline=True)
+        creators_note = refresh_creators(
+            cache, [h.get("n") for h in heroes.values()], verbose=False)
+    except Exception as exc:  # optional signal, never fail the pass
+        creators_note = f"creator feeds failed ({exc})"
     return (f"{len(ids)} players, {refreshed} pub samples refreshed "
             f"({pub_calls} calls), {od.calls - pub_calls} esports calls, "
-            f"{round(time.time() - started)}s")
+            f"creators: {creators_note}, {round(time.time() - started)}s")
 
 
 def _schedule_matchups(schedule, teams, league_name):

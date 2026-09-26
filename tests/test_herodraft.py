@@ -195,7 +195,7 @@ def test_meta_heroes_join_the_bot_candidate_pool(tmp_path, monkeypatch):
     hids = [h for h, _ in state.bot_candidates(0, "pick", 12)]
     assert 14 in hids
     assert state.rating(0, 14)["m"] == 1.0
-    assert state.snapshot()["meta_tags"]["14"] == "S"
+    assert state.snapshot()["meta_tags"]["14"]["tier"] == "S"
 
 
 def test_role_coverage_penalises_a_fourth_carry_and_rewards_the_open_seat():
@@ -296,3 +296,109 @@ def test_hub_routes_before_and_after_loading(tmp_path, monkeypatch):
 
 
 import json  # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# Creator meta signal (BSJ, Speeed...): feeds -> heroes -> rating credit
+# ---------------------------------------------------------------------------
+
+from scout import creators  # noqa: E402
+from scout.cache import Cache  # noqa: E402
+from scout.heroes import HERO_FALLBACK  # noqa: E402
+
+FEED = """<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns:media="http://search.yahoo.com/mrss/" xmlns="http://www.w3.org/2005/Atom">
+ <title>BSJ</title>
+ <entry><yt:videoId>3E1hVNORiD4</yt:videoId><title>Top 3 heroes in every role 7.41f</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=3E1hVNORiD4"/><published>{fresh}T15:00:00+00:00</published>
+  <media:group><media:description>0:00 intro
+1:10 Carry: Ursa, PL and wk
+3:40 Mid - KotL / Shadow Fiend
+5:00 Offlane: Axe, Timbersaw
+6:30 Pos 4 - Ringmaster &amp; Hoodwink
+8:00 Hard support - Veno and Treant
+MKB is core vs PA</media:description></media:group></entry>
+ <entry><yt:videoId>abcdefghijk</yt:videoId><title>I played a fun game</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=abcdefghijk"/><published>{fresh}T10:00:00+00:00</published>
+  <media:group><media:description>Ursa Ursa Ursa</media:description></media:group></entry>
+</feed>"""
+
+
+def _fresh():
+    import datetime as _dt
+    return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
+
+
+def test_feed_parsing_and_hero_extraction_by_line():
+    entries = creators.parse_feed(FEED.format(fresh=_fresh()))
+    assert [e["id"] for e in entries] == ["3E1hVNORiD4", "abcdefghijk"]
+    matcher = creators.hero_matcher(list(HERO_FALLBACK.values()))
+    heroes = creators.extract_heroes(entries[0]["title"] + "\n" + entries[0]["description"], matcher)
+    assert heroes["Ursa"] == [1] and heroes["Phantom Lancer"] == [1] and heroes["Wraith King"] == [1]
+    assert heroes["Keeper of the Light"] == [2] and heroes["Shadow Fiend"] == [2]
+    assert heroes["Axe"] == [3] and heroes["Ringmaster"] == [4] and heroes["Hoodwink"] == [4]
+    assert heroes["Venomancer"] == [5] and heroes["Treant Protector"] == [5]
+    assert heroes["Phantom Assassin"] == []          # named, no role on that line
+    assert creators.is_meta_video(entries[0]["title"])
+    assert not creators.is_meta_video(entries[1]["title"])
+
+
+def test_refresh_uses_feeds_and_signal_decays_with_age(tmp_path, monkeypatch):
+    cache = Cache(str(tmp_path / "cache"))
+    watch = tmp_path / "creators.json"
+    watch.write_text(json.dumps({
+        "creators": [{"name": "BSJ", "channel_id": "UCxxxxxxxxxxxxxxxxxxxxxx"},
+                     {"name": "Speeed", "handle": "speeeddota"}],
+        "videos": [{"who": "Speeed", "title": "Top 2 Broken Hero for Every Role 7.41f",
+                    "date": _fresh(), "url": "https://www.youtube.com/watch?v=OOnmfoLz7ic",
+                    "heroes": {"Ursa": [1], "Axe": [3]}},
+                   {"who": "BSJ", "title": "Best 3 heroes in every role 7.41",
+                    "date": "2026-01-01", "url": "https://www.youtube.com/watch?v=2kBSbUYDcEc",
+                    "heroes": {"Venomancer": [5]}}],
+    }), encoding="utf-8")
+    monkeypatch.setattr(creators, "fetch_feed",
+                        lambda session, cid: creators.parse_feed(FEED.format(fresh=_fresh())))
+    monkeypatch.setattr(creators, "resolve_channel_id", lambda session, handle: None)
+    note = creators.refresh_creators(cache, list(HERO_FALLBACK.values()), path=str(watch),
+                                     verbose=False)
+    assert note == "1/2 creators, 1 meta videos"
+    signal = creators.creator_signal(cache, list(HERO_FALLBACK.values()), path=str(watch))
+    # Ursa: BSJ from the feed + Speeed from the hand entry -> two creators
+    assert sorted(r["who"] for r in signal["Ursa"]) == ["BSJ", "Speeed"]
+    # today's upload weighs ~1.0 (a few hours of decay), the hand entry exactly 1.0
+    assert abs(creators.creator_value(signal["Ursa"]) - min(
+        config.HERODRAFT_CREATOR_CAP, 2 * config.HERODRAFT_CREATOR_BONUS)) < 0.03
+    # the same creator twice counts once
+    assert creators.creator_value(signal["Ursa"] * 2) == creators.creator_value(signal["Ursa"])
+    # Venomancer is in the fresh feed video; the January hand entry is past
+    # max_age_days and contributes nothing
+    assert [r["title"] for r in signal["Venomancer"]] == ["Top 3 heroes in every role 7.41f"]
+    assert creators.recency_weight(0, 120) == 1.0
+    assert creators.recency_weight(30, 120) == 0.5
+    assert creators.recency_weight(100, 120) == config.HERODRAFT_CREATOR_FLOOR
+    assert creators.recency_weight(121, 120) == 0.0
+
+
+def test_creator_credit_stacks_on_the_curated_tier_and_reaches_the_bot(tmp_path, monkeypatch):
+    from scout.herodraft import creator_videos, load_meta_heroes
+    heroes = {hid: {"n": n, "key": "", "attr": "all"} for hid, n in HERO_FALLBACK.items()}
+    signal = {"Ursa": [{"who": "BSJ", "title": "Top 3 7.41f", "date": _fresh(),
+                        "url": "u1", "pos": [1], "weight": 1.0}],
+              "Chen": [{"who": "Speeed", "title": "Secretly broken", "date": _fresh(),
+                        "url": "u2", "pos": [4], "weight": 1.0}]}
+    meta = load_meta_heroes(heroes, creators=signal)
+    assert meta_value(meta["heroes"], 70) == round(1.0 + config.HERODRAFT_CREATOR_BONUS, 2)
+    assert meta["heroes"][66]["tier"] == "" and meta["heroes"][66]["pos"] == [4]   # Chen: creator-only
+    assert meta_value(meta["heroes"], 66) == config.HERODRAFT_CREATOR_BONUS
+    vids = creator_videos(meta["heroes"])
+    assert {v["who"] for v in vids} == {"BSJ", "Speeed"}
+    state = _state(tmp_path, monkeypatch, book={})
+    state.meta["tags"] = {66: meta["heroes"][66]}
+    state.heroes[66] = {"n": "Chen", "key": "", "attr": "int"}
+    pick_idx = next(i for i, step in enumerate(CM_SEQUENCE)
+                    if step["type"] == "pick" and step["team"] == 0)
+    state.idx = pick_idx
+    hids = [h for h, _ in state.bot_candidates(0, "pick", 20)]
+    assert 66 in hids, "a creator-only hero should be on the bot's radar"
+    snap = state.snapshot()
+    assert snap["meta_tags"]["66"] == {"tier": "", "creators": ["Speeed"]}

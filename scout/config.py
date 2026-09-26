@@ -254,6 +254,17 @@ HERODRAFT_ASSIGN_ROLE_WEIGHT = 0.8   # position fit vs comfort when seating a pi
 # Curated current-patch meta (scout/meta_heroes.json): S/A/B tiers by position.
 HERODRAFT_W_META = 1.3
 HERODRAFT_META_TIER_VALUE = {"S": 1.0, "A": 0.6, "B": 0.3}
+# Creator meta signal (scout/creators.py + scout/meta_creators.json): recent
+# meta videos from watched creators (BSJ, Speeed...). Each creator that has
+# named the hero in a recent video adds HERODRAFT_CREATOR_BONUS × a recency
+# weight (1.0 this week, sliding to the floor over DECAY_DAYS, dropped past
+# MAX_AGE_DAYS), capped at HERODRAFT_CREATOR_CAP. Sits on top of the tier.
+HERODRAFT_CREATOR_BONUS = 0.45
+HERODRAFT_CREATOR_CAP = 0.9
+HERODRAFT_CREATOR_DECAY_DAYS = 60
+HERODRAFT_CREATOR_FLOOR = 0.3
+HERODRAFT_CREATOR_MAX_AGE_DAYS = 120
+HERODRAFT_CREATOR_TTL_HOURS = 12     # feed refresh cadence when online
 # A ban is worth less when the banner wants the hero more than the target does:
 # pick it instead of wasting a ban on it.
 HERODRAFT_BAN_SELF_DISCOUNT = 0.35

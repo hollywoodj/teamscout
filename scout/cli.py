@@ -253,6 +253,22 @@ def run_mock_mode(args):
     )
 
 
+def run_refresh_creators_mode(args):
+    """Pull the watched creators' YouTube feeds into the creator meta cache."""
+    from .cache import Cache
+    from .creators import refresh_creators
+    from .herodraft import load_full_heroes
+    from .opendota import OpenDota
+    if args.offline:
+        print("  ✗ --refresh-creators needs the network; drop --offline.")
+        return
+    cache = Cache()
+    heroes = load_full_heroes(OpenDota(), cache, offline=True)
+    names = [h.get("n") for h in heroes.values()]
+    print("🎥 Refreshing creator meta videos...")
+    print(f"  {refresh_creators(cache, names)}")
+
+
 def run_herodraft_mode(args):
     """Hero-draft practice: Captains Mode pick/ban vs a bot built from the
     opposing roster's real hero data (self-contained page, no dashboard needed)."""
@@ -336,6 +352,10 @@ def build_parser():
                         action="store_true",
                         help="Mirrored team/opponent web scout with current "
                              "LD2L rosters, officials, hero history, and deep stats")
+    parser.add_argument("--refresh-creators", action="store_true",
+                        help="Pull recent meta videos from the creators in "
+                             "scout/meta_creators.json (BSJ, Speeed...) into "
+                             "the hero draft's creator signal")
     parser.add_argument("--refresh-esports", action="store_true",
                         help="Resolve Team Scout's OpenDota-based esports "
                              "history (Dotabuff-equivalent, amateur leagues "
@@ -363,7 +383,9 @@ def main():
         sys.exit(0)
     signal.signal(signal.SIGINT, handle_sigint)
 
-    if args.refresh_esports:
+    if args.refresh_creators:
+        run_refresh_creators_mode(args)
+    elif args.refresh_esports:
         run_refresh_esports_mode(args)
     elif args.teamscout:
         run_team_scout_mode(args)

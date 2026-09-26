@@ -1,0 +1,28 @@
+{
+  "_comment": "Creator watchlist for the hero draft's creator meta signal (scout/creators.py). `creators` are pulled from their public YouTube RSS feed by `python ld2l_scout.py --refresh-creators` (also run by the Team Scout auto-refresh pass); `handle` is resolved to a channel id on first run, or set `channel_id` yourself. `videos` are hand entries: add a video the feed missed, or set `heroes` ({\"Hero\": [positions]}) to override what was read from a video's description (matched by URL / video id). `pin: true` keeps a hand entry alive past max_age_days.",
+  "creators": [
+    {"name": "BSJ", "handle": "BananaSlamJamma", "channel_id": "", "weight": 1.0,
+     "note": "11k coach; 'Top 3 heroes in every role <patch>' series lands within days of each patch letter"},
+    {"name": "Speeed", "handle": "speeeddota", "channel_id": "", "weight": 1.0,
+     "note": "took over the GameLeap channel in 2026; 'Top 2 broken hero for every role' + 'broken hero' videos per patch letter"}
+  ],
+  "keywords": ["tier", "best", "broken", "meta", "patch", "every role", "each role", "top ", "climb", "spam", "pick", "heroes", "strongest"],
+  "max_age_days": 120,
+  "videos": [
+    {"who": "BSJ", "title": "Top 3 heroes in every role 7.41f", "date": "2026-09-25",
+     "url": "https://www.youtube.com/watch?v=3E1hVNORiD4",
+     "heroes": {}, "notes": "heroes are read from the video description on refresh; fill `heroes` by hand after watching if the description names none"},
+    {"who": "BSJ", "title": "Nerf the best heroes | 7.41f Patch Analysis", "date": "2026-09-18",
+     "url": "https://www.youtube.com/watch?v=h1VhQhG8fSI", "heroes": {}},
+    {"who": "BSJ", "title": "The BEST Hero in Patch 7.41e", "date": "2026-09-05",
+     "url": "https://www.youtube.com/watch?v=Y20PrUrFwJ0", "heroes": {}},
+    {"who": "Speeed", "title": "Top 2 Broken Hero for Every Role - CLIMB MMR FAST - Dota 2 Patch 7.41f Meta Guide", "date": "2026-09-19",
+     "url": "https://www.youtube.com/watch?v=OOnmfoLz7ic", "heroes": {}},
+    {"who": "BSJ", "title": "The Best 3 Heroes in Every Role in 7.41d", "date": "2026-07-06",
+     "url": "https://www.youtube.com/watch?v=-Hf1nQ_fZgk", "heroes": {}},
+    {"who": "BSJ", "title": "The Best 3 Heroes in Every Role in 7.41", "date": "2026-03-26",
+     "url": "https://www.youtube.com/watch?v=2kBSbUYDcEc",
+     "heroes": {"Venomancer": [5], "Alchemist": [1], "Wraith King": [1]},
+     "notes": "base-patch video: 'Venomancer is the absolute most broken five', Alchemist in all his games, WK fallen off but pickable. Older than max_age_days, so it no longer counts unless pinned."}
+  ]
+}
