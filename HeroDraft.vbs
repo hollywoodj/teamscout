@@ -4,9 +4,11 @@
 '  Double-click to start Captains Mode pick/ban practice. A
 '  console window shows the board URL + status, and the war-room
 '  board opens in your browser automatically. Build both rosters,
-'  flip for first pick, and draft against the bot (patch 7.40
-'  order). Press Ctrl+C in the console (or close the window) to
-'  stop. Rosters are saved to herodraft_teams.json between runs.
+'  flip for first pick, and draft against the bot (current
+'  Captains Mode order; the patch meta comes from
+'  scout\meta_heroes.json). Press Ctrl+C in the console (or
+'  close the window) to stop. Rosters are saved to
+'  herodraft_teams.json between runs.
 '
 '  The board runs on http://localhost:8323/ so it can run at the
 '  same time as the mock auction (port 8322).

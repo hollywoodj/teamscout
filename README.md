@@ -34,7 +34,7 @@ python ld2l_scout.py --offline       # rebuild reports from cache, zero network
 python ld2l_scout.py --live          # draft day: follow the live draft (read-only)
 python ld2l_scout.py --mock          # practice: local mock auction vs AI captains
 python ld2l_scout.py --mock --me "Hollywood"   # pick your seat (default: Hollywood)
-python ld2l_scout.py --herodraft     # practice: Captains Mode hero draft vs a bot
+python ld2l_scout.py --herodraft     # practice: Captains Mode hero draft vs a bot (also the Mock Draft button in Team Scout)
 python ld2l_scout.py --teamscout     # mirror: scout your team against an opponent
 ```
 
@@ -129,6 +129,16 @@ powershell -ExecutionPolicy Bypass -File services\install_teamscout_task.ps1
 To pick up a fresh scout run: `Stop-ScheduledTask -TaskName 'Team Scout'; Start-ScheduledTask -TaskName 'Team Scout'`. Logs: `logs\teamscout.log`.
 
 The always-on process also watches BBC's `feed.json` and match cache. When a new week is posted, Team Scout rebuilds itself within about 20 seconds. This week's series is on the **Teams** page; click a row to open that matchup.
+
+**Mock Draft button.** The header (next to Matchup) and the Matchup page both carry
+a **⚔ Mock Draft** button. It opens the Captains Mode practice board at
+`/draft` behind the same sign-in, with **Your Team and the Opponent already
+seated** (the rosters as loaded in Team Scout, standins included, plus the
+posted team keys so the bot reads the right official draft book). Each
+sign-in gets its own draft, so two teams can practise at once through the
+funnel. The board's pool loads in the background after Team Scout starts;
+`/draft` says "still loading" for the first few seconds. See *Hero draft
+practice* below for how the bot drafts.
 
 **Opponents set themselves.** This week's series come straight from the league sites: LD2L from the newest week on `ld2l.org/schedule/<season>`, RD2L from the division's matchups page on rd2l.gg. BBC's posted matchups are only the fallback when ld2l.org is unreachable and nothing is cached. The always-on process rechecks both sites every 30 minutes (`TEAMSCOUT_SCHEDULE_POLL_MINUTES`) and rebuilds when a new week appears. When My Team is set (a team sign-in, or loading a team into My Team), the Opponent side becomes that week's opponent. It does this once per week: pick a different opponent by hand and it stays until the next week is posted.
 
@@ -406,45 +416,59 @@ Captains nominate from lowest to highest starting budget (source order breaks
 ties), and each mock team card's blue budget bar shows the share of starting
 money remaining.
 
-**Hero draft practice (`--herodraft`)**: practice the *in-game* Captains Mode
-pick/ban against the team you're about to face, at `http://localhost:8323/`,
-on a board **laid out like the Dota client** — your picks stack down one side,
+**Hero draft practice (`--herodraft`, or the Mock Draft button in Team Scout)**:
+practice the *in-game* Captains Mode pick/ban against the team you're about to
+face, at `http://localhost:8323/` standalone or at Team Scout's `/draft`, on a
+board **laid out like the Dota client** — your picks stack down one side,
 theirs down the other, ban strips and the phase timer across the top, and the
 hero pool in the four attribute columns (Strength / Agility / Intelligence /
 Universal, alphabetical, portraits only) in the exact in-game arrangement. Build
 your roster and the enemy roster from the cached signup pool **or pick the
 same teams Team Scout is using** (persisted to `herodraft_teams.json`), name
 the opposition, choose first pick and side — or coin-flip both. The draft
-order is the current **patch 7.40** Captains Mode sequence (first-pick bans
-3-2-2 / second-pick 4-1-2, picks 1-3-1 both sides), with the real clocks:
-15s first ban phase, 30s everything else, 130s reserve each, timed-out ban =
-no ban, timed-out pick = random hero.
+order is the current Captains Mode sequence (introduced in 7.34, unchanged
+through **7.41f**): first-pick bans 3-2-2 / second-pick 4-1-2, picks 1-3-1,
+with the real clocks: 15s first ban phase, 30s everything else, 130s reserve
+each, timed-out ban = no ban, timed-out pick = random hero.
 
-The bot drafts the enemy side from **Team Scout's official pick/ban book** —
-the first-pick heroes they've actually opened and won with, their most
-successful league heroes, and the bans they repeat — plus each player's
-lifetime stats, 180-day form, and organized-league comfort. If they have
-first-picked a hero 3–0 and you leave it up, they take it. Bans still
-target *your* roster's comfort heroes and their signature openers.
+**What the bot drafts from** (all of it also feeds the hints on your turn):
 
-**Hero ratings + win probability**: every draftable hero shows a Dotabuff-style
-rating (e.g. **+4.10**) on its tile and in the Scouting Report, combining four
-signals — your roster's **comfort** on the hero, the hero's **patch winrate**
-in the LD2L rank brackets (OpenDota `/heroStats`), its **matchup advantage vs**
-the heroes the enemy has already picked, and its coverage **synergy with** your
-own picks (both from the OpenDota hero-vs-hero matrix). A live **win-probability
-meter** at the top reads "*your team is 55% favored*" from the heroes on the
-board so far, and each pick lands in the feed with its rating ("picks Meepo
-(+7.5)"). On your turns the Scouting Report ranks the best bans (their biggest
-threats) and picks (your best-rated heroes) with the full breakdown, and each
-pick is auto-assigned to the roster player who plays it best.
+- **Team Scout's official draft book** for each team — the heroes they have
+  actually picked in league matches, ranked by *success, not volume*: a shrunk
+  win rate above 50% scaled by √games, so a 3–0 hero outranks a 6–4 which
+  outranks a 5–5 habit (the old games×winrate product got that backwards).
+  **Undefeated heroes** (2+ games, no losses) get an extra bonus that grows
+  with the streak; the first-pick record with a hero dominates the opening
+  pick; slot habits count a little.
+- **Each player's own official hero record** — who played what, and won, in
+  their officials. A player who is 3–0 on a hero in league play gets the
+  strongest comfort credit in the tool (more than 30 pubs at 60%), tagged
+  `3–0 in officials (undefeated)` in the feed. Team Scout's per-player official
+  rows are joined to the draft pool automatically.
+- **Lifetime / 180-day / league-lobby comfort** from OpenDota, as before.
+- **Role coverage** — every candidate is checked against the seats (pos 1–5,
+  from `hero_positions.py`) the team's earlier picks already cover. A hero
+  whose positions are still open scores up, a fourth carry scores down, and
+  the weight grows with the pick index so the last pick fills the hole. Each
+  pick is then seated with the roster player whose comfort *and* measured
+  position profile fit it best (the carry player gets the carry).
+- **Patch meta**, two ways. Online, OpenDota's bracket win rates and the
+  hero-vs-hero matchup matrix (cached for days). Always, a curated
+  current-patch tier list in **`scout/meta_heroes.json`** — S/A/B by position
+  with a one-line why and the sources — so key meta heroes are recognised even
+  offline and are always in the bot's candidate pool. It is hand-maintained:
+  when a new patch lands, edit the file (names as OpenDota spells them) and
+  the board picks it up on next start. The hints drawer marks meta heroes
+  with an S/A badge and the sub-line shows the patch it was written for.
+- **Bans** rate the hero from the *opponent's* perspective (their comfort,
+  their official record, their open seats, how it counters what you already
+  hold), plus the bans they themselves repeat. A ban is discounted when *you*
+  want the hero more than they do — that's a pick, not a ban — and the hint
+  says so.
 
-The patch meta is fetched once from OpenDota (hero winrates + a 127-call
-matchup matrix) and cached for days, so subsequent drafts — and `--offline` —
-run entirely from cache. Without any cached meta the board still works on
-roster comfort alone (ratings just omit the patch/matchup terms). Fully local:
-nothing is sent to ld2l.org or Steam (hero portraits load from the Steam CDN
-when online, plain tiles otherwise).
+The hints drawer's **Official records** panel lists each side's proven league
+heroes (undefeated first, with the player and record) so you can see the ban
+targets and your own safe picks at a glance; heroes already taken grey out.
 
 **AI drafting model**: each team seats its captain plus its purchases into
 *distinct* positions 1–5 by assignment — a P2/P3 flex slides to P3 when a
@@ -550,8 +574,9 @@ scout/
   auction.py       past auction-draft harvesting + kNN price estimator
   live.py          --live draft-day mode: read-only draft follower + localhost server
   mockdraft.py     --mock mode: local practice auction vs AI captains (offline)
-  herodraft.py     --herodraft mode: Captains Mode pick/ban practice vs a bot
-  herodraft_html.py  Dota-themed draft board page (served by herodraft.py)
+  herodraft.py     Captains Mode pick/ban practice vs a bot (--herodraft, and Team Scout's /draft)
+  herodraft_html.py  Dota-themed draft board page
+  meta_heroes.json curated current-patch meta tiers by position (hand-edited per patch)
   bbc_source.py    read-only current-season team/official adapter for BBC artifacts
   team_scout.py    --teamscout payload builder and localhost server
   team_scout_html.py mirrored team/opponent scouting interface

@@ -1570,3 +1570,74 @@ def test_render_page_auto_sets_this_weeks_opponent():
     # boot, league switch, and loading My Team all re-point the opponent
     assert page.count("autoOpponent(") >= 4
     assert "if(side==='mine')autoOpponent(true)" in page
+
+
+# ---------------------------------------------------------------------------
+# Mock draft: the hero draft board behind the Team Scout sign-in
+# ---------------------------------------------------------------------------
+
+class _FakeHub:
+    """Enough of HeroDraftHub to prove the handler delegates /draft to it."""
+
+    def __init__(self):
+        self.gets, self.posts = [], []
+
+    def route_get(self, path, key="local", head=False):
+        self.gets.append((path, key, head))
+        if path == "/draft":
+            return 200, "text/html; charset=utf-8", b"<html>board</html>"
+        if path == "/draft/state":
+            return 200, "application/json", b'{"phase":"setup"}'
+        return None
+
+    def route_post(self, path, body, key="local"):
+        self.posts.append((path, body, key))
+        return 200, {"ok": True}
+
+
+@contextlib.contextmanager
+def _draft_server(monkeypatch, accounts, hub):
+    monkeypatch.setattr(team_scout, "AUTH_FAIL_DELAY", 0)
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), team_scout._make_handler(_FakeState(), accounts, hub)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_mock_draft_routes_need_the_password_and_are_keyed_per_signin(monkeypatch):
+    hub = _FakeHub()
+    accounts = team_scout.parse_teamscout_accounts(
+        "ld2l:pw1:ld2l:Wolves\nrd2l:pw2:rd2l:Bears\n")
+    with _draft_server(monkeypatch, accounts, hub) as base:
+        assert _request(base, "/draft")[0] == 401
+        assert _request(base, "/draft/state")[0] == 401
+        assert _request(base, "/draft/start", method="POST", body={})[0] == 401
+        assert not hub.gets and not hub.posts
+        assert _request(base, "/draft?mine=wolves", auth=_basic("ld2l", "pw1"))[0] == 200
+        assert _request(base, "/draft/state", auth=_basic("rd2l", "pw2"))[0] == 200
+        status, _ = _request(base, "/draft/act", method="POST", body={"hid": 1},
+                             auth=_basic("ld2l", "pw1"))
+        assert status == 200
+    assert [(p, k) for p, k, _ in hub.gets] == [("/draft", "ld2l"), ("/draft/state", "rd2l")]
+    assert hub.posts == [("/draft/act", {"hid": 1}, "ld2l")]
+
+
+def test_mock_draft_is_absent_when_no_hub_is_wired(monkeypatch):
+    with _auth_server(monkeypatch) as base:
+        assert _request(base, "/draft", auth=_basic("x", "whykennywhy"))[0] == 404
+
+
+def test_page_has_a_mock_draft_button_that_launches_the_board():
+    page = render_page({"season": "S22", "players": [], "teams": [], "account": {}})
+    assert "data-mockdraft" in page
+    assert 'window.open(mockDraftUrl(),' in page
+    assert '"/draft"+(qs?"?"+qs:"")' in page
+    # the nav's view switching must not swallow the launch button
+    assert '.nav button[data-view]' in page

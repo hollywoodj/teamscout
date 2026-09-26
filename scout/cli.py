@@ -330,7 +330,7 @@ def build_parser():
     )
     parser.add_argument("--herodraft", action="store_true",
                         help="Hero draft practice: Captains Mode pick/ban "
-                             "(patch 7.40 order) against a bot that drafts "
+                             "(current Captains Mode order) against a bot that drafts "
                              "from Team Scout official picks/bans")
     parser.add_argument("--teamscout", "--team-scout", dest="teamscout",
                         action="store_true",

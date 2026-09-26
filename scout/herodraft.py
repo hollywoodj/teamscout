@@ -6,16 +6,27 @@ about to face. Fully local; nothing is sent to ld2l.org or Steam.
   - Rosters: pick the same BBC / Team Scout teams you're scouting, or assemble
     from the cached signup pool (persisted to herodraft_teams.json).
   - The bot drafts for the enemy from Team Scout's official pick/ban book
-    (first-pick openers, successful heroes, their real bans) plus each
-    player's lifetime / 180-day / league comfort. Bans deny YOUR comfort
-    heroes and their signature openers the same way.
-  - Draft order is Captains Mode as of patch 7.40 (2025-12-15): first-pick
-    bans 3-2-2 / second-pick 4-1-2, picks 1-3-1 both sides, 15s first ban
-    phase, 30s everything else, 130s reserve each. Timed out ban = no ban;
-    timed out pick = random hero — same as the real client.
+    (first-pick openers, undefeated and most successful heroes, their real
+    bans), each roster player's OWN official hero record (a player who is
+    3-0 on a hero in league play reaches for it again), and each player's
+    lifetime / 180-day / league comfort. Bans deny YOUR comfort heroes and
+    signature openers the same way, and are discounted when the banner
+    would rather just pick the hero.
+  - Role coverage: every pick is scored against the seats (pos 1-5) the
+    team's earlier picks already cover, so the bot doesn't stack three
+    carries, and each pick is seated with the player whose comfort AND
+    measured position fit it best.
+  - Patch meta: OpenDota's live bracket winrates + matchup matrix (when
+    online) plus a curated, hand-editable current-patch tier list
+    (scout/meta_heroes.json) so key meta heroes are recognised offline.
+  - Draft order is the Captains Mode sequence introduced in 7.34 and still
+    current on 7.41f: first-pick bans 3-2-2 / second-pick 4-1-2, picks 1-3-1
+    both sides, 15s first ban phase, 30s everything else, 130s reserve each.
+    Timed out ban = no ban; timed out pick = random hero — as in the client.
   - First pick / side can be chosen or coin-flipped in the UI.
 
-Server layout mirrors mockdraft.py: ThreadingHTTPServer + JSON polling.
+Runs standalone (--herodraft, ThreadingHTTPServer + JSON polling) or embedded
+in Team Scout behind its sign-in (HeroDraftHub: one draft per sign-in).
 """
 
 import json
@@ -32,6 +43,7 @@ from . import config
 from .analysis import is_organized_match
 from .cache import Cache
 from .fetch import fetch_player_sections, players_from_snapshot
+from .hero_positions import POS_WEIGHTS, affinity
 from .heroes import HERO_FALLBACK
 from .opendota import OpenDota
 
@@ -131,7 +143,30 @@ def build_profile(player, sections):
         "mmr": player.get("mmr") or 0,
         "pref_role": player.get("pref_role") or "Any",
         "heroes": heroes, "recent": recent, "league": league,
+        # {hid: {g, w}} from BBC / league official matches, attached by
+        # load_league_context when Team Scout data is available.
+        "official": {},
     }
+
+
+def is_undefeated(rec, min_games=None):
+    """True for a {g, w} record with no losses and enough games to count."""
+    if not rec:
+        return False
+    min_games = (config.HERODRAFT_UNDEFEATED_MIN_GAMES
+                 if min_games is None else min_games)
+    g, w = int(rec.get("g") or 0), int(rec.get("w") or 0)
+    return g >= min_games and w == g
+
+
+def player_affinity(prof):
+    """Cached {pos: share} of where this player's hero pool actually sits."""
+    aff = prof.get("_aff")
+    if aff is None:
+        games = {hid: e["g"] for hid, e in (prof.get("heroes") or {}).items()}
+        aff, _ = affinity(games)
+        prof["_aff"] = aff
+    return aff
 
 
 def hero_score(prof, hid, now=None):
@@ -142,6 +177,17 @@ def hero_score(prof, hid, now=None):
     """
     now = now or time.time()
     score, bits = 0.0, []
+    off = (prof.get("official") or {}).get(hid)
+    if off and off.get("g"):
+        bonus = min(config.HERODRAFT_OFFICIAL_BONUS_CAP,
+                    config.HERODRAFT_OFFICIAL_BONUS * off["g"])
+        wr = off["w"] / off["g"]
+        score += bonus * (0.5 + wr)        # 0-2 counts a little, 2-0 a lot
+        tag = f"{off['w']}–{off['g'] - off['w']} in officials"
+        if is_undefeated(off):
+            score += config.HERODRAFT_UNDEFEATED_PLAYER_BONUS
+            tag += " (undefeated)"
+        bits.append(tag)
     e = prof["heroes"].get(hid)
     if e:
         pw, pg = config.HERODRAFT_WR_PRIOR
@@ -177,7 +223,8 @@ def team_threats(profiles, now=None):
     now = now or time.time()
     per_hero = {}
     for prof in profiles:
-        hids = set(prof["heroes"]) | set(prof["recent"]) | set(prof["league"])
+        hids = (set(prof["heroes"]) | set(prof["recent"]) | set(prof["league"])
+                | set(prof.get("official") or {}))
         for hid in hids:
             s, why = hero_score(prof, hid, now)
             if s > 0.05:
@@ -217,9 +264,16 @@ def _stat():
 
 
 def build_draft_book(team_matches, team_key):
-    """Pick/ban frequencies for one BBC team_key from Team Scout match rows."""
+    """Pick/ban frequencies for one BBC team_key from Team Scout match rows.
+
+    picks   {hid: {g, w, slots: {pick_index: {g, w}}}}  team record per hero
+    openers {is_first_pick: {hid: {g, w}}}               their first pick
+    bans    {hid: n}                                      bans they make
+    players {steam32: {hid: {g, w}}}                      who played what
+    """
     picks, bans = {}, {}
     openers = {True: {}, False: {}}
+    players = {}
     games = 0
     for match in team_matches or []:
         radiant = (match.get("radiant") or {}).get("team_key")
@@ -231,6 +285,16 @@ def build_draft_book(team_matches, team_key):
         else:
             continue
         games += 1
+        side_rows = ((match.get("radiant") if team_num == 0 else match.get("dire"))
+                     or {}).get("players") or []
+        for row in side_rows:
+            try:
+                sid, hid = int(row.get("id")), int(row.get("hero_id"))
+            except (TypeError, ValueError):
+                continue
+            rec = players.setdefault(sid, {}).setdefault(hid, _stat())
+            rec["g"] += 1
+            rec["w"] += int(win)
         pb = match.get("picks_bans") or []
         fp = first_pick_side(pb)
         is_fp = fp is not None and fp == team_num
@@ -258,11 +322,38 @@ def build_draft_book(team_matches, team_key):
             sl = rec["slots"].setdefault(slot, _stat())
             sl["g"] += 1
             sl["w"] += int(win)
-    return {"games": games, "picks": picks, "openers": openers, "bans": bans}
+    return {"games": games, "picks": picks, "openers": openers, "bans": bans,
+            "players": players}
+
+
+def record_edge(rec):
+    """Success-ranked evidence for a {g, w} record: shrunk winrate above 50%
+    scaled by sqrt(games), so 3-0 (+0.52) > 6-4 (+0.29) > 5-5 (0) > 0-3.
+    A raw games×winrate product would rank a 5-5 habit above a 3-0 hero."""
+    g, w = int(rec.get("g") or 0), int(rec.get("w") or 0)
+    if not g:
+        return 0.0
+    wr = (w + 1) / (g + 2)
+    return (wr - 0.5) * math.sqrt(g)
+
+
+def undefeated_bonus(rec):
+    if not is_undefeated(rec):
+        return 0.0
+    extra = rec["g"] - config.HERODRAFT_UNDEFEATED_MIN_GAMES
+    return min(config.HERODRAFT_UNDEFEATED_TEAM_CAP,
+               config.HERODRAFT_UNDEFEATED_TEAM_BONUS
+               + config.HERODRAFT_UNDEFEATED_TEAM_STEP * extra)
 
 
 def scout_pick_value(book, hid, pick_index, is_first_pick_team):
-    """How strongly this team's official drafts point at hid right now."""
+    """How strongly this team's official drafts point at hid right now.
+
+    Success-ranked, not volume-ranked: the record's edge (record_edge), a
+    small familiarity credit for simply being in their draft pool, an
+    undefeated bonus that grows with the streak, slot habit, and on the
+    opening pick their first-pick record with the hero.
+    """
     if not book:
         return 0.0
     try:
@@ -272,17 +363,50 @@ def scout_pick_value(book, hid, pick_index, is_first_pick_team):
     score = 0.0
     rec = book["picks"].get(hid)
     if rec and rec["g"]:
-        wr = (rec["w"] + 1) / (rec["g"] + 2)
-        score += rec["g"] * (wr - 0.35)
+        score += 2.0 * record_edge(rec)
+        score += 0.25 * min(1.0, rec["g"] / 4.0)
+        score += undefeated_bonus(rec)
         sl = rec.get("slots", {}).get(pick_index)
         if sl and sl["g"]:
-            score += 0.35 * sl["g"]
+            score += 0.15 * sl["g"]
     if pick_index == 0:
         opener = book["openers"].get(bool(is_first_pick_team), {}).get(hid)
         if opener and opener["g"]:
             # Wins on the opener dominate: 3-0 first pick >> 0-3 habit.
-            score += opener["w"] * 1.5 + (opener["g"] - opener["w"]) * 0.15
+            score += opener["w"] * 0.6 + (opener["g"] - opener["w"]) * 0.05
     return score
+
+
+def book_cards(book, names=None, limit=None):
+    """Success-ranked hero cards from a team's official book, for the hints
+    drawer: undefeated heroes first, then by record edge. names maps
+    steam32 -> display name for the 'who' line."""
+    if not book or not book.get("picks"):
+        return []
+    limit = limit or config.HERODRAFT_SCOUT_CARDS
+    names = names or {}
+    who_by_hero = {}
+    for sid, recs in (book.get("players") or {}).items():
+        for hid, rec in recs.items():
+            cur = who_by_hero.get(hid)
+            if cur is None or (rec["w"], rec["g"]) > (cur[1]["w"], cur[1]["g"]):
+                who_by_hero[hid] = (sid, rec)
+    cards = []
+    for hid, rec in book["picks"].items():
+        if not rec["g"]:
+            continue
+        und = is_undefeated(rec)
+        who = ""
+        hit = who_by_hero.get(hid)
+        if hit:
+            sid, prec = hit
+            who = f"{names.get(sid, sid)} {prec['w']}–{prec['g'] - prec['w']}"
+        cards.append({
+            "hid": hid, "g": rec["g"], "w": rec["w"], "undefeated": und,
+            "edge": round(record_edge(rec), 2), "who": who,
+        })
+    cards.sort(key=lambda c: (-int(c["undefeated"]), -c["edge"], -c["g"]))
+    return cards[:limit]
 
 
 def scout_ban_value(book, hid):
@@ -314,7 +438,8 @@ def scout_why(book, hid, kind, pick_index, is_first_pick_team):
             return f"{tag} {opener['w']}–{losses} in LD2L"
     rec = book["picks"].get(hid)
     if rec and rec["g"]:
-        return f"{rec['w']}–{rec['g'] - rec['w']} official"
+        tag = "undefeated " if is_undefeated(rec) else ""
+        return f"{tag}{rec['w']}–{rec['g'] - rec['w']} official"
     return ""
 
 
@@ -373,9 +498,111 @@ def load_league_context(od, cache, profiles, rows, offline=True):
         rows.append({"steam32": sid, "name": player["name"],
                      "mmr": 0, "role": "Any"})
         known.add(sid)
+    # Each player's own official hero record - the strongest comfort signal.
+    for sid, matches in (bbc.get("official") or {}).items():
+        prof = profiles.get(sid)
+        if not prof:
+            continue
+        recs = {}
+        for row in matches or []:
+            try:
+                hid = int(row.get("hero_id"))
+            except (TypeError, ValueError):
+                continue
+            rec = recs.setdefault(hid, _stat())
+            rec["g"] += 1
+            rec["w"] += 1 if row.get("result") == "W" else 0
+        prof["official"] = recs
+        prof.pop("_aff", None)
     rows.sort(key=lambda r: -r["mmr"])
     teams.sort(key=lambda t: t["name"].casefold())
     return {"teams": teams, "books": books}
+
+
+# --------------------------------------------------------------------------
+# Curated current-patch meta (scout/meta_heroes.json) + role coverage
+# --------------------------------------------------------------------------
+
+META_HEROES_FILE = os.path.join(os.path.dirname(__file__), "meta_heroes.json")
+
+
+def load_meta_heroes(heroes, path=None):
+    """{patch, updated, sources, heroes: {hid: {tier, pos, note}}}.
+
+    Names are resolved against the live hero map first, then the bundled
+    fallback names, so a Valve rename doesn't silently drop a hero."""
+    empty = {"patch": "", "updated": "", "sources": [], "heroes": {}}
+    try:
+        with open(path or META_HEROES_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return empty
+    if not isinstance(data, dict):
+        return empty
+    by_name = {}
+    for hid, h in (heroes or {}).items():
+        name = h.get("n") if isinstance(h, dict) else h
+        if name:
+            by_name[str(name).casefold()] = int(hid)
+    for hid, name in HERO_FALLBACK.items():
+        by_name.setdefault(name.casefold(), hid)
+    tags = {}
+    for name, info in (data.get("heroes") or {}).items():
+        hid = by_name.get(str(name).casefold())
+        if hid is None or not isinstance(info, dict):
+            continue
+        tier = str(info.get("tier") or "").upper()
+        if tier not in config.HERODRAFT_META_TIER_VALUE:
+            continue
+        pos = []
+        for p in info.get("pos") or []:
+            try:
+                p = int(p)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= p <= 5:
+                pos.append(p)
+        tags[hid] = {"tier": tier, "pos": pos,
+                     "note": str(info.get("note") or "")[:160]}
+    return {"patch": str(data.get("patch") or "")[:16],
+            "updated": str(data.get("updated") or "")[:32],
+            "sources": [str(x) for x in (data.get("sources") or [])],
+            "heroes": tags}
+
+
+def meta_value(tags, hid):
+    info = (tags or {}).get(hid)
+    if not info:
+        return 0.0
+    return config.HERODRAFT_META_TIER_VALUE.get(info.get("tier"), 0.0)
+
+
+def role_coverage(picks):
+    """{pos: 0..1} how much of each seat the picked heroes already cover."""
+    cov = {p: 0.0 for p in range(1, 6)}
+    for hid in picks:
+        for pos, w in POS_WEIGHTS.get(hid, {}).items():
+            cov[pos] = min(1.0, cov[pos] + w)
+    return cov
+
+
+def role_fill(picks, hid):
+    """0..1 share of hid's positional profile that lands on still-open seats,
+    or None when the hero has no position prior."""
+    w = POS_WEIGHTS.get(hid)
+    if not w:
+        return None
+    cov = role_coverage(picks)
+    return sum(share * (1.0 - cov[pos]) for pos, share in w.items())
+
+
+def role_term(picks, hid):
+    """Signed role-coverage term for a candidate pick (before the weight)."""
+    fill = role_fill(picks, hid)
+    if fill is None:
+        return 0.0
+    idx = min(len(picks), len(config.HERODRAFT_ROLE_URGENCY) - 1)
+    return (fill - 0.5) * config.HERODRAFT_ROLE_URGENCY[idx]
 
 
 # --------------------------------------------------------------------------
@@ -414,13 +641,15 @@ def _coverage_synergy(adv, top_meta):
     return out
 
 
-def load_meta(offline=False):
+def load_meta(offline=False, heroes=None):
     """Patch hero winrates + hero-vs-hero advantage matrix + synergy proxy.
 
     base — {hid: pub winrate % in the LD2L brackets, current patch window}
     adv  — {a: {b: % advantage of a vs b}}, from a's own matchup sample so
            it's internally consistent (wr(a vs b) − a's overall matchup wr)
     syn  — {a: {b: ± coverage synergy}} (see _coverage_synergy)
+    tags — {hid: {tier, pos, note}} curated meta (scout/meta_heroes.json)
+    patch — the curated file's patch label, e.g. "7.41f"
     """
     cache = Cache()
     od = OpenDota()
@@ -494,7 +723,10 @@ def load_meta(offline=False):
     top_meta = [h for h, _ in sorted(((int(k), v["g"]) for k, v in stats.items()),
                                      key=lambda x: -x[1])[:config.HERODRAFT_TOP_META]]
     syn = _coverage_synergy(adv, top_meta) if adv else {}
-    return {"base": base, "adv": adv, "syn": syn}
+    curated = load_meta_heroes(heroes or {})
+    return {"base": base, "adv": adv, "syn": syn,
+            "tags": curated["heroes"], "patch": curated["patch"],
+            "meta_updated": curated["updated"]}
 
 
 # --------------------------------------------------------------------------
@@ -541,6 +773,8 @@ class DraftState:
         self.profiles = profiles            # steam32 -> profile
         self.heroes = heroes                # hid -> {n,key,attr}
         self.meta = meta or {"base": {}, "adv": {}, "syn": {}}
+        self.meta.setdefault("tags", {})
+        self.meta.setdefault("patch", "")
         league = league or {}
         self.league_teams = league.get("teams") or []
         self.books = league.get("books") or {}
@@ -606,6 +840,7 @@ class DraftState:
         self.step_start = 0.0
         self.bot_delay = 0.0
         self.threats = [None, None]         # threat tables, built at start
+        self.scout_cards = [[], []]         # official-book cards per team
         self.summary = None
 
     def _valid_team_key(self, key):
@@ -679,6 +914,9 @@ class DraftState:
             self.threats = [None, None]
             self.threats[my_ti] = team_threats(mine, now)     # what team F/S=me plays
             self.threats[en_ti] = team_threats(enemy, now)
+            names = {p["steam32"]: p["name"] for p in self.profiles.values()}
+            self.scout_cards = [book_cards(self._book_for(ti), names)
+                                for ti in (0, 1)]
             self.phase = "drafting"
             self.add_event("status",
                            f"⚔ Draft begins — {'you' if self.me_first else self.enemy_name} "
@@ -790,19 +1028,25 @@ class DraftState:
         return True, "ok"
 
     def _assign_pick(self, ti, hid):
-        """Give the picked hero to the roster player who plays it best."""
-        best, best_s = None, -1.0
+        """Seat the picked hero with the roster player who plays it best:
+        comfort on the hero first, then whose measured position profile
+        matches where the hero is played (a carry player gets the carry)."""
+        best, best_total, best_s, best_fit = None, -1.0, 0.0, 0.0
+        weights = POS_WEIGHTS.get(hid, {})
         for prof in self._roster_profiles(ti):
             if prof["steam32"] in self.assigned_players[ti]:
                 continue
             s, _ = hero_score(prof, hid)
-            if s > best_s:
-                best, best_s = prof, s
+            aff = player_affinity(prof)
+            fit = sum(w * aff.get(pos, 0.0) for pos, w in weights.items())
+            total = s + config.HERODRAFT_ASSIGN_ROLE_WEIGHT * fit
+            if total > best_total:
+                best, best_total, best_s, best_fit = prof, total, s, fit
         if best is None:
             return None
         self.assigns[ti][hid] = best["name"]
         self.assigned_players[ti].add(best["steam32"])
-        return best["name"] if best_s > 0.1 else None
+        return best["name"] if (best_s > 0.1 or best_fit > 0.3) else None
 
     def _reason_for(self, ti, hid, kind):
         """Short 'why' for the feed: official draft book, else comfort."""
@@ -870,11 +1114,15 @@ class DraftState:
         if kind == "ban":
             banner = self._book_for(banner_ti if banner_ti is not None else other)
             scout = scout + scout_ban_value(banner, hid)
+        role = role_term(self.picks[ti], hid)
+        meta = meta_value(self.meta.get("tags"), hid)
         total = (config.HERODRAFT_W_COMFORT * comfort
                  + config.HERODRAFT_W_PATCH * patch
                  + config.HERODRAFT_W_VS * vs
                  + config.HERODRAFT_W_WITH * wth
-                 + config.HERODRAFT_W_SCOUT * scout)
+                 + config.HERODRAFT_W_SCOUT * scout
+                 + config.HERODRAFT_W_ROLE * role
+                 + config.HERODRAFT_W_META * meta)
         scout_line = scout_why(
             self._book_for(ti), hid, "pick", pick_index, ti == 0)
         if kind == "ban":
@@ -882,9 +1130,11 @@ class DraftState:
                 banner, hid, "ban", 0, False) or scout_line
         if scout_line:
             who = f"{scout_line}" + (f"; {who}" if who else "")
+        tag = (self.meta.get("tags") or {}).get(hid)
         return {"total": round(total, 2), "c": round(comfort, 2),
                 "p": round(patch, 2), "v": round(vs, 2), "w": round(wth, 2),
-                "s": round(scout, 2),
+                "s": round(scout, 2), "r": round(role, 2), "m": round(meta, 2),
+                "tier": tag["tier"] if tag else None,
                 "base": base, "who": who}
 
     def win_probability(self):
@@ -906,6 +1156,11 @@ class DraftState:
             for i, a in enumerate(self.picks[ti]):
                 for b in self.picks[ti][i + 1:]:
                     tot += config.HERODRAFT_W_WITH * self._mu_syn(a, b)
+            # lineup balance: seats covered minus heroes picked is 0 for a
+            # clean 1-5 and negative when picks overlap the same position
+            cov = role_coverage(self.picks[ti])
+            tot += config.HERODRAFT_W_ROLE * 0.6 * (
+                sum(cov.values()) - len(self.picks[ti]))
             return tot
 
         cross = sum(self._mu_adv(a, b)
@@ -939,11 +1194,23 @@ class DraftState:
                 ban_book = self._book_for(ti)
                 if ban_book:
                     hids.update(ban_book["bans"])
+            # key meta heroes are always on the table, comfort or not
+            hids.update(h for h, t in (self.meta.get("tags") or {}).items()
+                        if t.get("tier") in ("S", "A"))
             cands = []
             for hid in hids:
-                if hid in self.taken:
+                if hid in self.taken or hid not in self.heroes:
                     continue
                 r = self.rating(rate_ti, hid, kind=kind, banner_ti=ti)
+                if kind == "ban":
+                    # a hero the banner wants MORE than the target is a pick,
+                    # not a ban - spend the ban where the threat is
+                    mine = self.rating(ti, hid)["total"]
+                    self_discount = config.HERODRAFT_BAN_SELF_DISCOUNT * max(
+                        0.0, mine - r["total"])
+                    if self_discount:
+                        r = dict(r, total=round(r["total"] - self_discount, 2),
+                                 threat=r["total"], self_discount=round(self_discount, 2))
                 cands.append((r["total"], hid, r))
             cands.sort(key=lambda x: -x[0])
             return [(h, r) for _, h, r in cands[:k]]
@@ -1009,7 +1276,9 @@ class DraftState:
                                     config.HERODRAFT_SUGGESTIONS)
         return [{"hid": h, "rating": r["total"],
                  "parts": {"c": r["c"], "p": r["p"], "v": r["v"], "w": r["w"],
-                           "s": r["s"], "base": r["base"]},
+                           "s": r["s"], "r": r["r"], "m": r["m"],
+                           "tier": r.get("tier"), "base": r["base"],
+                           "self": r.get("self_discount")},
                  "why": r["who"]} for h, r in cands]
 
     def _build_summary(self):
@@ -1070,6 +1339,10 @@ class DraftState:
                              for h in self.heroes if h not in self.taken}
                             if turn and turn["is_me"] else None),
                 "has_meta": bool(self.meta["base"] or self.meta["adv"]),
+                "meta_patch": self.meta.get("patch") or "",
+                "meta_tags": {str(h): t["tier"]
+                              for h, t in (self.meta.get("tags") or {}).items()},
+                "scout_cards": self.scout_cards,
                 "league_teams": self.league_teams,
                 "mine_key": self.my_team_key,
                 "enemy_key": self.enemy_team_key,
@@ -1082,17 +1355,9 @@ class DraftState:
 
 
 # --------------------------------------------------------------------------
-# Engine thread + HTTP server
+# Hub: pool + meta loaded once, one draft per sign-in, one engine thread.
+# Used standalone (--herodraft) and embedded in Team Scout (/draft).
 # --------------------------------------------------------------------------
-
-def _engine_loop(state, stop):
-    while not stop.is_set():
-        try:
-            state.tick()
-        except Exception as e:  # keep the clock alive no matter what
-            print(f"  ⚠ engine tick error: {e}")
-        stop.wait(0.25)
-
 
 SOUND_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 SOUND_EXTS = {".mp3": "audio/mpeg", ".ogg": "audio/ogg",
@@ -1121,7 +1386,235 @@ def _resolve_sound_path(filename):
     return path, SOUND_EXTS[ext]
 
 
-def _make_handler(state, page_bytes):
+def _league_stamp():
+    """Identity of the Team Scout inputs the league context is built from."""
+    from .bbc_source import bbc_source_stamp
+    from .overrides import overrides_path
+    try:
+        info = os.stat(overrides_path())
+        ov = (info.st_mtime_ns, info.st_size)
+    except OSError:
+        ov = (0, 0)
+    return (bbc_source_stamp(), ov)
+
+
+class HeroDraftHub:
+    """Everything the draft board needs, loaded once per process.
+
+    `state_for(key)` hands out one DraftState per sign-in (Team Scout) or
+    the single "local" one (--herodraft). A single engine thread ticks every
+    live draft. The league context (teams, official books, per-player
+    official records) is rebuilt when BBC's feed or the roster overrides
+    change on disk, so a Team Scout roster edit shows up in the next draft.
+    """
+
+    def __init__(self, season, offline=False):
+        self.season = season
+        self.offline = offline
+        self._lock = threading.RLock()
+        self.label = None
+        self.pool = []
+        self.profiles = {}
+        self.heroes = {}
+        self.league = {"teams": [], "books": {}}
+        self.meta = {"base": {}, "adv": {}, "syn": {}, "tags": {}, "patch": ""}
+        self.page = b""
+        self.states = {}
+        self.ready = False
+        self.error = None
+        self._stamp = None
+        self._stop = threading.Event()
+        self._engine = None
+
+    # ---- loading ----
+    def load(self, verbose=True):
+        """Load the pool, league context and meta from cache (network only
+        for the meta when not offline). Returns True when a pool exists."""
+        from .herodraft_html import render_page
+
+        label, pool, profiles, heroes, league = load_pool(
+            self.season, offline=self.offline)
+        if not pool:
+            self.error = ("No cached player pool. Run the scout once first "
+                          "(python ld2l_scout.py).")
+            if verbose:
+                print(f"  ✗ {self.error}")
+            return False
+        meta = load_meta(offline=self.offline, heroes=heroes)
+        with self._lock:
+            self.label, self.pool, self.profiles = label, pool, profiles
+            self.heroes, self.league, self.meta = heroes, league, meta
+            self.page = render_page(pool, heroes, label, league["teams"]).encode("utf-8")
+            self._stamp = _league_stamp()
+            self.ready = True
+            self.error = None
+        if verbose:
+            self.describe()
+        self.start_engine()
+        return True
+
+    def load_async(self):
+        def run():
+            try:
+                self.load()
+            except Exception as exc:  # keep Team Scout up; the board reports it
+                self.error = f"hero draft failed to load: {exc}"
+                print(f"  ⚠ {self.error}")
+        threading.Thread(target=run, daemon=True).start()
+
+    def describe(self):
+        league_players = sum(1 for p in self.profiles.values() if p["league"])
+        official_players = sum(1 for p in self.profiles.values() if p.get("official"))
+        print(f"  📜 {len(self.pool)} players, {len(self.heroes)} heroes "
+              f"({league_players} with league lobby history, "
+              f"{official_players} with official hero records)")
+        n_books = sum(1 for b in self.league["books"].values() if b["games"])
+        if self.league["teams"]:
+            print(f"  🧭 Team Scout: {len(self.league['teams'])} teams, "
+                  f"{n_books} with official draft history")
+        else:
+            print("  ⚠ No Team Scout / BBC teams loaded — bot falls back to "
+                  "player comfort only")
+        meta = self.meta
+        if meta["base"] or meta["adv"]:
+            print(f"  📈 Patch meta: winrates for {len(meta['base'])} heroes, "
+                  f"matchup rows for {len(meta['adv'])} (ratings + win% on)")
+        else:
+            print("  ⚠ No OpenDota patch meta cached (offline, never fetched) "
+                  "— ratings use roster comfort + the curated meta list")
+        if meta.get("tags"):
+            print(f"  🗺 Curated meta {meta.get('patch') or '?'}: "
+                  f"{len(meta['tags'])} heroes tagged")
+
+    def refresh_league_if_changed(self):
+        """Rebuild teams/books/official records when Team Scout inputs moved."""
+        if not self.ready:
+            return False
+        stamp = _league_stamp()
+        if stamp == self._stamp:
+            return False
+        from .herodraft_html import render_page
+        cache = Cache()
+        od = OpenDota()
+        rows = list(self.pool)
+        try:
+            league = load_league_context(od, cache, self.profiles, rows, offline=True)
+        except OSError as exc:
+            print(f"  ⚠ Team Scout data unavailable: {exc}")
+            return False
+        with self._lock:
+            self.pool = rows
+            self.league = league
+            self.page = render_page(rows, self.heroes, self.label,
+                                    league["teams"]).encode("utf-8")
+            self._stamp = stamp
+            for state in self.states.values():
+                if state.phase != "drafting":
+                    state.pool = rows
+                    state.league_teams = league["teams"]
+                    state.books = league["books"]
+        return True
+
+    # ---- drafts ----
+    def state_for(self, key="local"):
+        key = str(key or "local")
+        with self._lock:
+            state = self.states.get(key)
+            if state is None:
+                if len(self.states) >= config.HERODRAFT_MAX_STATES:
+                    idle = [k for k, st in self.states.items() if st.phase != "drafting"]
+                    for k in idle[:len(self.states) - config.HERODRAFT_MAX_STATES + 1]:
+                        del self.states[k]
+                state = DraftState(self.season, self.label, self.pool, self.profiles,
+                                   self.heroes, self.meta, self.league)
+                self.states[key] = state
+            return state
+
+    def tick_all(self):
+        with self._lock:
+            states = list(self.states.values())
+        for state in states:
+            try:
+                state.tick()
+            except Exception as e:  # keep the clock alive no matter what
+                print(f"  ⚠ engine tick error: {e}")
+
+    def start_engine(self):
+        with self._lock:
+            if self._engine is not None:
+                return
+            self._engine = threading.Thread(target=self._engine_loop, daemon=True)
+            self._engine.start()
+
+    def _engine_loop(self):
+        while not self._stop.is_set():
+            self.tick_all()
+            self._stop.wait(0.25)
+
+    def stop(self):
+        self._stop.set()
+
+    # ---- routing (shared by the standalone server and Team Scout) ----
+    def route_get(self, path, key="local", head=False):
+        """(status, content_type, body) for a GET/HEAD, or None if not ours."""
+        if path in ("/draft", "/draft/"):
+            if not self.ready:
+                msg = (self.error or "Hero draft is still loading — refresh in a moment.")
+                body = (f"<!doctype html><meta charset=utf-8><meta http-equiv=refresh "
+                        f"content=3><title>Mock draft</title><body style='font:15px "
+                        f"system-ui;padding:40px;background:#1c242c;color:#d6dde3'>"
+                        f"<p>{html_escape(msg)}</p>").encode("utf-8")
+                return 503, "text/html; charset=utf-8", body
+            self.refresh_league_if_changed()
+            return 200, "text/html; charset=utf-8", self.page
+        if path == "/draft/state":
+            if not self.ready:
+                return 503, "application/json", json.dumps(
+                    {"phase": "loading", "error": self.error}).encode()
+            return 200, "application/json", json.dumps(
+                self.state_for(key).snapshot()).encode()
+        if path.startswith("/sounds/"):
+            resolved = _resolve_sound_path(path[len("/sounds/"):])
+            if not resolved:
+                return 404, "text/plain", b"" if head else b"not found"
+            spath, ctype = resolved
+            if head:
+                return 200, ctype, b""
+            with open(spath, "rb") as f:
+                return 200, ctype, f.read()
+        return None
+
+    def route_post(self, path, body, key="local"):
+        """(status, json_obj) for a POST, or None if not ours."""
+        if not path.startswith("/draft/"):
+            return None
+        if not self.ready:
+            return 503, {"ok": False, "msg": self.error or "still loading"}
+        body = body if isinstance(body, dict) else {}
+        state = self.state_for(key)
+        if path == "/draft/teams":
+            ok, msg = state.set_teams(
+                body.get("mine", []), body.get("enemy", []), body.get("enemy_name"),
+                body.get("mine_key"), body.get("enemy_key"))
+            return (200 if ok else 400), {"ok": ok, "msg": msg}
+        if path == "/draft/start":
+            ok, msg = state.start(body.get("first", "random"), body.get("side", "random"))
+            return (200 if ok else 400), {"ok": ok, "msg": msg}
+        if path == "/draft/act":
+            ok, msg = state.act(state.my_team_index(), body.get("hid"))
+            return (200 if ok else 400), {"ok": ok, "msg": msg}
+        if path == "/draft/reset":
+            state.reset()
+            return 200, {"ok": True}
+        return None
+
+
+def html_escape(text):
+    import html as _html
+    return _html.escape(str(text or ""))
+
+
+def _make_handler(hub):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):
             pass
@@ -1145,63 +1638,35 @@ def _make_handler(state, page_bytes):
             except (ValueError, json.JSONDecodeError):
                 return {}
 
-        def _serve_sound(self, filename, head=False):
-            resolved = _resolve_sound_path(filename)
-            if not resolved:
-                self._send(404, "text/plain", b"" if head else b"not found")
-                return
-            path, ctype = resolved
-            if head:
-                self.send_response(200)
-                self.send_header("Content-Type", ctype)
-                self.send_header("Cache-Control", "no-store")
-                self.send_header("Content-Length", str(os.path.getsize(path)))
-                self.end_headers()
-                return
-            with open(path, "rb") as f:
-                self._send(200, ctype, f.read())
-
         def do_GET(self):
             path = self.path.split("?")[0]
             if path in ("/", "/index.html"):
-                self._send(200, "text/html; charset=utf-8", page_bytes)
-            elif path == "/draft/state":
-                self._json(200, state.snapshot())
-            elif path.startswith("/sounds/"):
-                self._serve_sound(path[len("/sounds/"):])
-            else:
+                path = "/draft"
+            hit = hub.route_get(path)
+            if hit is None:
                 self._send(404, "text/plain", b"not found")
+            else:
+                self._send(*hit)
 
         def do_HEAD(self):
             path = self.path.split("?")[0]
-            if path.startswith("/sounds/"):
-                self._serve_sound(path[len("/sounds/"):], head=True)
-            else:
+            hit = hub.route_get(path, head=True) if path.startswith("/sounds/") else None
+            if hit is None:
                 self._send(404, "text/plain", b"")
+                return
+            code, ctype, _ = hit
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
 
         def do_POST(self):
             path = self.path.split("?")[0]
-            body = self._body()
-            if path == "/draft/teams":
-                ok, msg = state.set_teams(
-                    body.get("mine", []),
-                    body.get("enemy", []),
-                    body.get("enemy_name"),
-                    body.get("mine_key"),
-                    body.get("enemy_key"))
-                self._json(200 if ok else 400, {"ok": ok, "msg": msg})
-            elif path == "/draft/start":
-                ok, msg = state.start(body.get("first", "random"),
-                                      body.get("side", "random"))
-                self._json(200 if ok else 400, {"ok": ok, "msg": msg})
-            elif path == "/draft/act":
-                ok, msg = state.act(state.my_team_index(), body.get("hid"))
-                self._json(200 if ok else 400, {"ok": ok, "msg": msg})
-            elif path == "/draft/reset":
-                state.reset()
-                self._json(200, {"ok": True})
-            else:
+            hit = hub.route_post(path, self._body())
+            if hit is None:
                 self._send(404, "text/plain", b"not found")
+            else:
+                self._json(*hit)
 
     return Handler
 
@@ -1211,50 +1676,24 @@ class _DraftServer(ThreadingHTTPServer):
 
 
 def run_herodraft(season, port=None, offline=False, open_browser=True):
-    from .herodraft_html import render_page
-
     port = port or config.HERODRAFT_PORT
     print("\n⚔ Loading hero-draft pool from cache...")
-    label, pool, profiles, heroes, league = load_pool(season, offline=offline)
-    if not pool:
-        print("  ✗ No cached player pool. Run the scout once first "
-              "(python ld2l_scout.py), then start --herodraft.")
+    hub = HeroDraftHub(season, offline=offline)
+    if not hub.load():
+        print("    Then start --herodraft.")
         return
-    league_players = sum(1 for p in profiles.values() if p["league"])
-    print(f"  📜 {len(pool)} players, {len(heroes)} heroes "
-          f"({league_players} players with league match history)")
-    n_books = sum(1 for b in league["books"].values() if b["games"])
-    if league["teams"]:
-        print(f"  🧭 Team Scout: {len(league['teams'])} teams, "
-              f"{n_books} with official draft history")
-    else:
-        print("  ⚠ No Team Scout / BBC teams loaded — bot falls back to "
-              "player comfort only")
-    meta = load_meta(offline=offline)
-    if meta["base"] or meta["adv"]:
-        print(f"  📈 Patch meta: winrates for {len(meta['base'])} heroes, "
-              f"matchup rows for {len(meta['adv'])} (ratings + win% on)")
-    else:
-        print("  ⚠ No patch meta cached (offline, never fetched) — ratings "
-              "fall back to roster comfort only")
-
-    state = DraftState(season, label, pool, profiles, heroes, meta, league)
-    page = render_page(pool, heroes, label, league["teams"]).encode("utf-8")
-
     try:
-        server = _DraftServer(("127.0.0.1", port), _make_handler(state, page))
+        server = _DraftServer(("127.0.0.1", port), _make_handler(hub))
     except OSError as e:
         print(f"\n  ✗ Port {port} is already in use ({e}).\n    Close the other "
               f"window first (or change --port), then relaunch.\n")
         return
 
-    stop = threading.Event()
-    threading.Thread(target=_engine_loop, args=(state, stop), daemon=True).start()
-
     url = f"http://localhost:{port}/"
+    patch = hub.meta.get("patch") or "current"
     print("\n" + "=" * 60)
-    print("  ⚔ HERO DRAFT PRACTICE — Captains Mode vs the bot (patch 7.40 order)")
-    print(f"  Pool: {label} | Pick Team Scout sides, flip for first pick, draft.")
+    print(f"  ⚔ HERO DRAFT PRACTICE — Captains Mode vs the bot (patch {patch} meta)")
+    print(f"  Pool: {hub.label} | Pick Team Scout sides, flip for first pick, draft.")
     print(f"  Board: {url}")
     print("  Ctrl+C to stop")
     print("=" * 60 + "\n")
@@ -1265,5 +1704,5 @@ def run_herodraft(season, port=None, offline=False, open_browser=True):
     except KeyboardInterrupt:
         print("\n👋 Draft practice stopped.")
     finally:
-        stop.set()
+        hub.stop()
         server.server_close()

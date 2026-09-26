@@ -28,7 +28,7 @@ from .fetch import (
 )
 from .hero_positions import POS_WEIGHTS
 from .hero_pool import build_hero_pool
-from .herodraft import load_full_heroes
+from .herodraft import HeroDraftHub, load_full_heroes
 from .heroes import load_hero_map
 from .league_history import (
     league_history_for, refresh_league_history, unavailable_history,
@@ -1944,12 +1944,39 @@ def _log_auth_failure(path, forwarded_for):
     )
 
 
-def _make_handler(state, password_or_accounts):
+def _draft_key(account):
+    """One practice draft per sign-in; the shared password shares one board."""
+    if not isinstance(account, dict):
+        return "shared"
+    return str(account.get("user") or "shared")
+
+
+def _make_handler(state, password_or_accounts, draft_hub=None):
     accounts = _coerce_accounts(password_or_accounts)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
+
+        def _draft_get(self, path, head=False):
+            """Mock draft board + its JSON, behind the same sign-in."""
+            if draft_hub is None:
+                return False
+            if not (path.startswith("/draft") or path.startswith("/sounds/")):
+                return False
+            hit = draft_hub.route_get(path, _draft_key(self.account), head=head)
+            if hit is None:
+                self.send_error(404)
+                return True
+            code, ctype, body = hit
+            if head:
+                self.send_response(code)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+            else:
+                self._send(code, ctype, body)
+            return True
 
         def _challenge(self, log=True, delay=True):
             if delay:
@@ -2029,6 +2056,16 @@ def _make_handler(state, password_or_accounts):
                 query = parse_qs(parts.query).get("q", [""])[0]
                 self._handle_search(query)
                 return
+            if self._draft_get(path):
+                return
+            self.send_error(404)
+
+        def do_HEAD(self):
+            path = urlsplit(self.path).path
+            if not self._authenticated():
+                return
+            if self._draft_get(path, head=True):
+                return
             self.send_error(404)
 
         def _handle_search(self, query):
@@ -2060,6 +2097,12 @@ def _make_handler(state, password_or_accounts):
                 self._handle_pull_player(body)
             elif path == "/api/roster":
                 self._handle_roster(body)
+            elif draft_hub is not None and path.startswith("/draft/"):
+                hit = draft_hub.route_post(path, body, _draft_key(self.account))
+                if hit is None:
+                    self.send_error(404)
+                else:
+                    self._json(*hit)
             else:
                 self.send_error(404)
 
@@ -2173,11 +2216,16 @@ def run_team_scout(season, port=None, offline=False, open_browser=True,
         raise SystemExit(1)
     payload, _ = state.snapshot()
     port = port or config.TEAMSCOUT_PORT
+    # The Mock Draft button: the Captains Mode board lives at /draft behind the
+    # same sign-in. Its pool loads in the background so boot stays quick.
+    draft_hub = HeroDraftHub(season, offline=offline)
     try:
-        server = _TeamScoutServer(("127.0.0.1", port), _make_handler(state, accounts))
+        server = _TeamScoutServer(("127.0.0.1", port),
+                                  _make_handler(state, accounts, draft_hub))
     except OSError as error:
         print(f"  ✗ Port {port} is already in use ({error}).")
         raise SystemExit(1) from error
+    draft_hub.load_async()
     state.watch_bbc()
     state.watch_schedules()
     if auto_refresh:
@@ -2199,6 +2247,7 @@ def run_team_scout(season, port=None, offline=False, open_browser=True,
     else:
         print("  Sign-in: one shared password")
     print(f"  App: {url}")
+    print(f"  Mock draft: {url}draft")
     print("  Ctrl+C to stop")
     print("=" * 60 + "\n")
     if open_browser:
@@ -2208,4 +2257,5 @@ def run_team_scout(season, port=None, offline=False, open_browser=True,
     except KeyboardInterrupt:
         print("\n👋 Team Scout stopped.")
     finally:
+        draft_hub.stop()
         server.server_close()

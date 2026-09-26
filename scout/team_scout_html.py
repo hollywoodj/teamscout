@@ -298,6 +298,12 @@ button,select,input{background:var(--panel);border-color:var(--line);border-radi
 .method .matchupCap{margin:0}
 .sbContext{grid-column:1/-1;position:relative;z-index:1;display:flex;justify-content:center;gap:16px;padding:9px 16px;background:var(--panel);border-top:1px solid var(--line);font-size:13px;color:var(--muted)}
 .sbContext b{color:var(--ink);font-weight:600}
+.mockDraftBtn{color:var(--gold)!important}
+.mockDraftBar{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:0 0 16px;padding:12px 16px;border:1px solid var(--line);border-radius:var(--radius);background:var(--panel)}
+.mockDraftBar b{display:block;font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--gold);margin-bottom:3px}
+.mockDraftBar span{font-size:13px;color:var(--muted)}
+.mockDraftBar button{white-space:nowrap;color:var(--gold);border-color:#5c4d2f}
+@media(max-width:980px){.mockDraftBar{flex-direction:column;align-items:stretch}}
 </style>
 </head>
 <body>
@@ -311,6 +317,7 @@ button,select,input{background:var(--panel);border-color:var(--line);border-radi
       <button data-view="opponent">Opponent</button>
       <button data-view="recon">Recon</button>
       <button data-view="matchup">Matchup</button>
+      <button type="button" class="mockDraftBtn" data-mockdraft title="Practice the Captains Mode pick/ban against this opponent">&#9876; Mock Draft</button>
     </nav>
     <nav class="nav navSide" aria-label="League">
       <button data-view="admin">Admin</button>
@@ -1061,7 +1068,23 @@ function setTheme(t){t=THEME_COLORS[t]?t:"sports";if(t==="lotus"&&!lotusAllowed(
 function scorebugSide(side){const ps=members(side),t=teamByKey(sideLoadedKey(side)),games=ps.reduce((s,p)=>s+p.official.games,0),wins=ps.reduce((s,p)=>s+p.official.wins,0),rec=t&&t.record?String(t.record).replace(/\s*-\s*/,"–"):(games?`${wins}–${games-wins}`:"");const cap=t&&t.captain;const theme=currentTheme(),meta=theme==="military"?`${side==="mine"?"Friendly":"Hostile"}${cap?`, commanded by ${E(cap)}`:""}`:theme==="lotus"?`${side==="mine"?"Allied fleet":"Enemy fleet"}${cap?`, Commander ${E(cap)}`:""}`:(cap?`Captain ${E(cap)}`:(side==="mine"?"Your team":"Opponent"));return `<div class="sbSide ${side}"><div style="min-width:0"><div class="sbName">${E(state[side+"Name"])}</div><span class="sbMeta">${meta}</span></div>${rec?`<div class="sbRec">${E(rec)}</div>`:""}</div>`}
 function scorebugContext(){const a=sideLoadedKey("mine"),b=sideLoadedKey("enemy");if(!a||!b)return "";const fixture=(DATA.matchups||[]).find(m=>(m.aKey===a&&m.bKey===b)||(m.aKey===b&&m.bKey===a));const games=(DATA.teamMatches||[]).filter(m=>{const k=[m.radiant.team_key,m.dire.team_key];return k.includes(a)&&k.includes(b)});const won=games.filter(m=>(m.radiant.team_key===a)===!!m.radiant_win).length;const h2h=games.length?`This season: ${E(state.mineName)} ${won}–${games.length-won} in games`:"First meeting this season";return `<div class="sbContext">${fixture?`<b>Week ${E(fixture.week)}</b>`:""}<span>${h2h}</span></div>`}
 function scorebug(){return `<section class="scorebug" aria-label="Matchup">${scorebugSide("mine")}<div class="sbMid" aria-hidden="true"></div>${scorebugSide("enemy")}${scorebugContext()}</section>`}
-function matchupPage(){const mine=members('mine'),enemy=members('enemy');return `${mine.length&&enemy.length?scorebug():''}<div class="mirror"><div class="side mine">${overview('mine')}</div><div class="side enemy">${overview('enemy')}</div></div>${mine.length&&enemy.length?`${keysPanel(mine,enemy)}<div class="contentBlock"><h3>Wins / losses</h3><div class="mirror"><div class="side mine">${winLossPanel(mine.flatMap(p=>officialRows(p)),state.mineName)}</div><div class="side enemy">${winLossPanel(enemy.flatMap(p=>officialRows(p)),state.enemyName)}</div></div></div><div class="contentBlock"><h3>Heroes</h3><div class="mirror"><div class="side mine">${heroPanel(mine)}</div><div class="side enemy">${heroPanel(enemy)}</div></div></div><div class="contentBlock"><h3>Roles</h3><div class="mirror"><div class="side mine">${teamRoles('mine')}</div><div class="side enemy">${teamRoles('enemy')}</div></div></div>`:''}`}
+function mockDraftUrl(){
+  // Hands the rosters as loaded here (standins included) to the draft board,
+  // plus the posted team keys so the bot reads the right official draft book.
+  const q=new URLSearchParams();
+  const mk=sideLoadedKey("mine"),ek=sideLoadedKey("enemy");
+  if(mk)q.set("mine",mk);if(ek)q.set("enemy",ek);
+  if(state.mine.length)q.set("mine_ids",state.mine.join(","));
+  if(state.enemy.length)q.set("enemy_ids",state.enemy.join(","));
+  if(state.enemyName&&state.enemyName!=="Opponent")q.set("enemy_name",state.enemyName);
+  const qs=q.toString();return "/draft"+(qs?"?"+qs:"");
+}
+function mockDraftBar(){
+  const enemy=members('enemy');
+  if(!enemy.length)return "";
+  return `<div class="mockDraftBar"><div><b>Mock draft</b><span>Practice the Captains Mode pick/ban against ${E(state.enemyName)} — the bot drafts from their official records, undefeated heroes and the current patch meta.</span></div><button type="button" class="loadTeam" data-mockdraft>&#9876; Launch mock draft</button></div>`;
+}
+function matchupPage(){const mine=members('mine'),enemy=members('enemy');return `${mine.length&&enemy.length?scorebug():''}${mockDraftBar()}<div class="mirror"><div class="side mine">${overview('mine')}</div><div class="side enemy">${overview('enemy')}</div></div>${mine.length&&enemy.length?`${keysPanel(mine,enemy)}<div class="contentBlock"><h3>Wins / losses</h3><div class="mirror"><div class="side mine">${winLossPanel(mine.flatMap(p=>officialRows(p)),state.mineName)}</div><div class="side enemy">${winLossPanel(enemy.flatMap(p=>officialRows(p)),state.enemyName)}</div></div></div><div class="contentBlock"><h3>Heroes</h3><div class="mirror"><div class="side mine">${heroPanel(mine)}</div><div class="side enemy">${heroPanel(enemy)}</div></div></div><div class="contentBlock"><h3>Roles</h3><div class="mirror"><div class="side mine">${teamRoles('mine')}</div><div class="side enemy">${teamRoles('enemy')}</div></div></div>`:''}`}
 function standingsTable(rows){
   const mineKey=sideLoadedKey("mine"),enemyKey=sideLoadedKey("enemy");
   return `<div class="tableWrap"><table class="tbl standingsTbl"><thead><tr><th>Team</th><th>#</th><th>W-L</th><th></th></tr></thead><tbody>${rows.map(r=>{
@@ -1832,7 +1855,8 @@ document.querySelectorAll("[data-pull-btn]").forEach(b=>b.onclick=()=>{const sid
 document.querySelectorAll("[data-hero-sort]").forEach(th=>th.onclick=()=>{heroSort.key=th.dataset.heroSort;render()});
 document.querySelectorAll("[data-open-signin]").forEach(b=>b.onclick=()=>{const wanted=SOURCE.teams.find(x=>x.key===b.dataset.openSignin);if(wanted&&leagueIds.length>1){const league=teamLeagueId(wanted);if(league&&league!==activeLeague)switchLeague(league)}const t=teamByKey(b.dataset.openSignin);if(!t)return;state.mine=activeRoster(t,[]);state.mineName=t.name||t.short;state.mineTeamKey=t.key;state.focusMine=null;state.pendingStandin=null;state.view="team";persist();render()});
 }
-document.querySelectorAll(".nav button").forEach(b=>b.onclick=()=>{state.view=b.dataset.view;persist();render()});
+document.querySelectorAll(".nav button[data-view]").forEach(b=>b.onclick=()=>{state.view=b.dataset.view;persist();render()});
+document.querySelectorAll("[data-mockdraft]").forEach(b=>b.onclick=()=>{window.open(mockDraftUrl(),"teamscout-mockdraft")});
 document.querySelectorAll(".themeSwitch button").forEach(b=>b.onclick=()=>setTheme(b.dataset.theme));
 const settingsBtn=document.querySelector(".settingsBtn"),settingsPanel=document.querySelector("#settingsPanel");
 function setSettingsOpen(open){settingsPanel.hidden=!open;settingsBtn.setAttribute("aria-expanded",String(open))}

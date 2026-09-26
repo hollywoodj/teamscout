@@ -244,6 +244,31 @@ body.drafting h1, body.drafting .sub{display:none}
 .sg .snm{font-size:12.5px; color:var(--ink)}
 .sg .swhy{font-size:10px; color:var(--ink-dim); line-height:1.4}
 .hintlite{color:var(--ink-dim); font-size:11.5px}
+.backrow{text-align:center; margin:-6px 0 8px; font-size:11px; letter-spacing:.1em;
+  text-transform:uppercase}
+.backrow a{color:var(--ink-dim); text-decoration:none}
+.backrow a:hover{color:var(--ink-hi)}
+/* meta tier badge on suggestion cards + tiles (hints on) */
+.mt{display:inline-block; font:700 9px/1 var(--ui); letter-spacing:.08em; padding:2px 4px;
+  border-radius:2px; margin-left:5px; vertical-align:middle; border:1px solid}
+.mt.S{color:#F3D06B; border-color:#8C6F1E}
+.mt.A{color:#9BBF4A; border-color:#4E6A1A}
+.mt.B{color:var(--ink-dim); border-color:var(--rule-hi)}
+.tile .mb{position:absolute; top:1px; left:1px; font:700 8px/1 var(--ui); padding:1px 3px;
+  background:rgba(14,18,24,.85); border:1px solid #8C6F1E; color:#F3D06B; display:none;
+  border-radius:1px; z-index:2}
+.tile .mb.A{border-color:#4E6A1A; color:#9BBF4A}
+.sc{display:flex; gap:8px; align-items:center; padding:4px 3px; font-size:11.5px}
+.sc img{width:44px; height:25px; object-fit:cover; border:1px solid var(--rule)}
+.sc .scn{color:var(--ink)}
+.sc .scr{color:var(--ink-dim); font-size:10px; line-height:1.35}
+.sc .und{color:#F3D06B; font-weight:600}
+.sc.taken{opacity:.35}
+.sc h4{font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-dim);
+  margin:6px 0 2px; font-weight:600}
+.schead{font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-dim);
+  margin:6px 0 3px; font-weight:600}
+.schead.mine{color:var(--good)} .schead.enemy{color:var(--bad)}
 
 /* --- right column: the 24-step draft panel + the action box under it --- */
 .rightcol{flex:0 0 clamp(300px, 23vw, 400px); display:flex; flex-direction:column;
@@ -390,7 +415,8 @@ body.burning .clock.reserve{animation:ticktock 1s steps(1) infinite}
 <div class="burn" aria-hidden="true"></div>
 <div class="wrap">
   <h1>Captains Mode</h1>
-  <div class="sub">Patch 7.40 draft order · __LABEL__</div>
+  <div class="sub" id="subLine">Captains Mode · __LABEL__</div>
+  <div class="backrow" id="backRow" style="display:none"><a href="/" id="backLink">&larr; Back to Team Scout</a></div>
 
   <!-- ================= SETUP ================= -->
   <div class="setup on" id="setup">
@@ -473,6 +499,9 @@ body.burning .clock.reserve{animation:ticktock 1s steps(1) infinite}
         </div>
         <div class="panelbox"><h3>Scouting report</h3><div id="suggBox">
           <div class="hintlite">Hints appear on your turn.</div>
+        </div></div>
+        <div class="panelbox"><h3>Official records</h3><div id="scoutBox">
+          <div class="hintlite">Their most successful league heroes appear here once the draft starts.</div>
         </div></div>
       </div>
       <div class="rightcol">
@@ -840,6 +869,7 @@ function buildGrid(){
     t.className = "tile"; t.id = "tile" + hid;
     t.tabIndex = 0; t.setAttribute("role", "button"); t.setAttribute("aria-label", hname(hid));
     t.innerHTML = '<div class="im">' + img(hid) + '</div>' +
+                  '<div class="mb" id="mb' + hid + '"></div>' +
                   '<div class="rb" id="rb' + hid + '" style="display:none"></div>';
     t.onclick = () => selectHero(hid);
     /* Space always toggles the selection; Enter selects on first press but,
@@ -977,14 +1007,22 @@ function syncGrid(){
     t.classList.toggle("sugg", hintsOn && suggs.has(hid) && !taken.has(hid));
     t.classList.toggle("dim", !!heroQuery && !hname(hid).toLowerCase().includes(heroQuery));
     const rb = document.getElementById("rb" + hid);
+    const tier = ST && ST.meta_tags ? ST.meta_tags[hid] : null;
+    const mb = document.getElementById("mb" + hid);
+    if (mb){
+      const showMeta = hintsOn && tier && tier !== "B" && !taken.has(hid);
+      mb.style.display = showMeta ? "block" : "none";
+      if (showMeta){ mb.textContent = tier; mb.className = "mb " + tier; }
+    }
+    const metaTitle = tier ? " · meta " + tier : "";
     if (hintsOn && ratings && ratings[hid] !== undefined && !taken.has(hid)){
       const v = ratings[hid];
       rb.style.display = "block";
       rb.textContent = rtText(v);
       rb.className = "rb " + rtClass(v);
-      t.title = hname(hid) + " " + rtText(v);
+      t.title = hname(hid) + " " + rtText(v) + metaTitle;
     } else {
-      rb.style.display = "none"; t.title = hname(hid);
+      rb.style.display = "none"; t.title = hname(hid) + metaTitle;
     }
   });
   renderActionBox();
@@ -1254,6 +1292,9 @@ function partsLine(p){
   if (p.base != null) bits.push("patch " + rtText(p.p) + " (" + p.base.toFixed(1) + "%)");
   if (p.v) bits.push("vs " + rtText(p.v));
   if (p.w) bits.push("with " + rtText(p.w));
+  if (p.r) bits.push("role " + rtText(p.r));
+  if (p.m) bits.push("meta " + rtText(p.m));
+  if (p.self) bits.push("(−" + p.self.toFixed(1) + ": you want it too — pick it)");
   return bits.join(" · ");
 }
 
@@ -1271,11 +1312,45 @@ function renderSuggs(){
     const d = document.createElement("div"); d.className = "sg";
     d.innerHTML = '<div class="srt ' + rtClass(x.rating) + '">' + rtText(x.rating) +
       '</div>' + img(x.hid) + '<div><div class="snm">' + esc(hname(x.hid)) +
+      (x.parts && x.parts.tier ? '<span class="mt ' + x.parts.tier + '">META ' + x.parts.tier + '</span>' : '') +
       '</div><div class="swhy">' + partsLine(x.parts) +
       (x.why ? '<br>' + esc(x.why) : '') + '</div></div>';
     d.onclick = () => { selectHero(x.hid); window.scrollTo({top:0}); };
     box.appendChild(d);
   });
+}
+
+function renderScout(){
+  const box = document.getElementById("scoutBox");
+  if (!box) return;
+  const cards = ST.scout_cards || [[], []];
+  const taken = new Set(ST.taken || []);
+  const teams = ST.teams || [];
+  let out = "";
+  [1, 0].forEach(pass => {
+    // enemy first (ban targets), then mine (pick targets)
+    teams.forEach((tm, ti) => {
+      if ((pass === 1) !== !tm.is_me) return;
+      const list = cards[ti] || [];
+      if (!list.length) return;
+      out += '<div class="schead ' + (tm.is_me ? "mine" : "enemy") + '">' +
+        esc(tm.is_me ? "Your proven heroes" : esc(tm.label) + " — proven heroes") + '</div>';
+      list.forEach(c => {
+        out += '<div class="sc' + (taken.has(c.hid) ? " taken" : "") + '">' + img(c.hid) +
+          '<div><div class="scn">' + esc(hname(c.hid)) +
+          (c.undefeated ? ' <span class="und">undefeated</span>' : '') +
+          '</div><div class="scr">' + c.w + "–" + (c.g - c.w) + " in officials" +
+          (c.who ? " · " + esc(c.who) : "") + '</div></div></div>';
+      });
+    });
+  });
+  box.innerHTML = out || '<div class="hintlite">No official draft history for these teams yet.</div>';
+}
+function renderSubLine(){
+  const el = document.getElementById("subLine");
+  if (!el || !ST) return;
+  const patch = ST.meta_patch ? "Patch " + ST.meta_patch + " meta · " : "";
+  el.textContent = patch + "Captains Mode · " + (ST.label || "");
 }
 
 function renderSummary(){
@@ -1376,14 +1451,37 @@ async function poll(){
   if (drafting){
     if (ST.turn && !ST.turn.is_me) selectedHid = null;
     renderTeamCards(); renderMeter(); renderDraftPanel();
-    renderTurn(); renderSuggs();
+    renderTurn(); renderSuggs(); renderScout();
     syncGrid(); renderSummary();
   }
+  renderSubLine();
 }
 setInterval(() => { if (ST && ST.turn) renderTurn(); }, 250);  // smooth clock + tick sounds
 setInterval(poll, 500);
 
-buildGrid(); applyHintsUI(); fillLeagueSelects(); renderLists(); probeRealSounds(); poll();
+/* Launched from Team Scout: /draft?mine=<key>&enemy=<key>&mine_ids=1,2&enemy_ids=..
+   &enemy_name=.. preselects both rosters. Ids (the rosters as edited in Team
+   Scout, standins included) win over the posted team when both are given. */
+function applyLaunchParams(){
+  let q;
+  try { q = new URLSearchParams(location.search); } catch (e) { return; }
+  const ids = v => (v || "").split(",").map(x => parseInt(x, 10))
+    .filter(n => Number.isFinite(n) && POOL.some(p => p.steam32 === n)).slice(0, 5);
+  const mk = q.get("mine"), ek = q.get("enemy");
+  if (mk && leagueByKey(mk)) applyLeague("mine", mk);
+  if (ek && leagueByKey(ek)) applyLeague("enemy", ek);
+  const mi = ids(q.get("mine_ids")), ei = ids(q.get("enemy_ids"));
+  if (mi.length){ mineSel = mi.filter(id => !ei.includes(id)); }
+  if (ei.length){ enemySel = ei.filter(id => !mineSel.includes(id)); }
+  const en = q.get("enemy_name");
+  if (en) document.getElementById("enemyName").value = en.slice(0, 40);
+  renderChips(); renderLists();
+  if (location.pathname.replace(/\/+$/, "") === "/draft"){
+    document.getElementById("backRow").style.display = "block";
+  }
+}
+buildGrid(); applyHintsUI(); fillLeagueSelects(); renderLists(); probeRealSounds();
+applyLaunchParams(); poll();
 </script>
 </body>
 </html>

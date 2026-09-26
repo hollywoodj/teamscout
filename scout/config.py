@@ -208,8 +208,10 @@ MOCK_AI_AGGR_RANGE = (0.9, 1.08)  # deterministic per-captain value jitter band,
 MOCK_TARGETS_FILE = "mock_targets.json"  # per-captain target lists (persisted)
 
 # ---- Hero draft practice (--herodraft: Captains Mode pick/ban vs a bot) ----
-# Draft order is patch 7.40 (2025-12-15), verified against Liquipedia: first-pick
-# bans 3-2-2 / second-pick 4-1-2, picks 1-3-1 for both — see herodraft.CM_PHASES.
+# Draft order is the Captains Mode sequence introduced in 7.34 and unchanged
+# through 7.41f (2026-09-15): first-pick bans 3-2-2 / second-pick 4-1-2, picks
+# 1-3-1 for both — see herodraft.CM_PHASES. The current patch label and the
+# curated meta live in scout/meta_heroes.json.
 HERODRAFT_PORT = 8323          # own default so --mock and --herodraft can coexist
 HERODRAFT_TEAMS_FILE = "herodraft_teams.json"  # saved rosters between sessions
 HERODRAFT_BAN1_SECONDS = 15    # first ban phase (7.34 shortened it from 30)
@@ -230,6 +232,33 @@ HERODRAFT_STACK_WEIGHT = 0.35  # threat credit for the 2nd-best player on a hero
 HERODRAFT_BOT_TOP_K = 4        # bot samples its move from the top K candidates
 HERODRAFT_BOT_SHARPNESS = 3.0  # weight ∝ score^sharpness (higher = greedier)
 HERODRAFT_SUGGESTIONS = 6      # hints shown on your turn
+# Official (BBC / league) hero records, per player. What a player has actually
+# won on in officials is the strongest comfort evidence there is: it is what
+# they reach for when it counts, on this patch, against this league.
+HERODRAFT_OFFICIAL_BONUS = 0.25      # per official game on the hero ...
+HERODRAFT_OFFICIAL_BONUS_CAP = 0.75  # ... capped, then scaled by (0.5 + winrate)
+HERODRAFT_UNDEFEATED_MIN_GAMES = 2   # w == g with at least this many = undefeated
+HERODRAFT_UNDEFEATED_PLAYER_BONUS = 0.4   # extra comfort for an undefeated player-hero
+# Team draft book: undefeated team heroes (any player) get a flat bonus that
+# grows with the streak, so a 4-0 hero outranks a 2-0 which outranks a 5-3.
+HERODRAFT_UNDEFEATED_TEAM_BONUS = 0.35
+HERODRAFT_UNDEFEATED_TEAM_STEP = 0.10     # per game past the minimum
+HERODRAFT_UNDEFEATED_TEAM_CAP = 0.65
+# Role coverage: each pick's positional profile (hero_positions.HERO_POS) is
+# checked against the seats the team's earlier picks already cover. A hero
+# whose positions are still open scores up to +0.5, a duplicate down to -0.5,
+# scaled by how urgent balance is at that pick (last pick must fill the hole).
+HERODRAFT_W_ROLE = 2.0
+HERODRAFT_ROLE_URGENCY = (0.3, 0.5, 0.9, 1.3, 1.8)  # by pick index 0..4
+HERODRAFT_ASSIGN_ROLE_WEIGHT = 0.8   # position fit vs comfort when seating a pick
+# Curated current-patch meta (scout/meta_heroes.json): S/A/B tiers by position.
+HERODRAFT_W_META = 1.3
+HERODRAFT_META_TIER_VALUE = {"S": 1.0, "A": 0.6, "B": 0.3}
+# A ban is worth less when the banner wants the hero more than the target does:
+# pick it instead of wasting a ban on it.
+HERODRAFT_BAN_SELF_DISCOUNT = 0.35
+HERODRAFT_MAX_STATES = 32      # embedded (Team Scout) drafts kept per process
+HERODRAFT_SCOUT_CARDS = 8      # scouted-hero cards per side in the hints drawer
 
 # Hero meta (patch winrates + hero-vs-hero matchups, both from OpenDota).
 HERODRAFT_STATS_TTL_HOURS = 24 * 3   # /heroStats refresh (patch winrates)
