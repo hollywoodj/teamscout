@@ -1,0 +1,8 @@
+---------------
+File: C:\Users\James\Dev\LD2L Scout\cache\default_ents.vents_c
+Exception: ValveResourceFormat.Utils.UnexpectedMagicException: Invalid KV3 signature for variable 'magic': 1263940357 (0x4B563305)
+   at ValveResourceFormat.ResourceTypes.BinaryKV3.Read(BinaryReader reader, Resource resource) in C:\Users\James\Dev\LD2L Scout\cache\vrf-source\ValveResourceFormat\Resource\ResourceTypes\BinaryKV3.cs:line 77
+   at ValveResourceFormat.Blocks.ResourceEditInfo2.Read(BinaryReader reader, Resource resource) in C:\Users\James\Dev\LD2L Scout\cache\vrf-source\ValveResourceFormat\Resource\Blocks\ResourceEditInfo2.cs:line 33
+   at ValveResourceFormat.Resource.Read(Stream input, Boolean verifyFileSize) in C:\Users\James\Dev\LD2L Scout\cache\vrf-source\ValveResourceFormat\Resource\Resource.cs:line 276
+   at Decompiler.Decompiler.ProcessFile(String path, Stream stream, String originalPath) in C:\Users\James\Dev\LD2L Scout\cache\vrf-source\Decompiler\Decompiler.cs:line 454
+

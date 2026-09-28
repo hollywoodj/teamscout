@@ -3,6 +3,8 @@
 import time
 from collections import Counter, defaultdict
 
+from .hero_attack import attack_type
+
 PUB_WINDOW_DAYS = 180
 GEM_MAX_RESULTS = 6
 GEM_MIN_COMBINED_GAMES = 6
@@ -178,6 +180,7 @@ def build_hero_pool(record_heroes, pub_rows, official_rows, esports_heroes,
 
         records.append({
             "id": hero_id,
+            "attackType": attack_type(hero_id),
             "lifetime": {"games": lifetime_games, "wins": lifetime_wins, "last": lifetime_last},
             "recent": {
                 "games": recent_games, "wins": recent_wins,
@@ -258,9 +261,23 @@ def build_hero_pool(record_heroes, pub_rows, official_rows, esports_heroes,
     kept_ids = {row["id"] for row in records[:60]} | comfort_ids | gem_ids
     heroes_out = [row for row in records if row["id"] in kept_ids]
 
+    attack_split = {}
+    for kind in ("Melee", "Ranged"):
+        group = [row for row in records if row["attackType"] == kind]
+        attack_split[kind.lower()] = {}
+        for period in ("recent", "lifetime"):
+            games = sum(row[period]["games"] for row in group)
+            wins = sum(row[period]["wins"] for row in group)
+            attack_split[kind.lower()][period] = {
+                "games": games,
+                "wins": wins,
+                "winrate": round(wins / games * 100, 1) if games else None,
+            }
+
     return {
         "heroes": heroes_out,
         "gems": gems,
+        "attackSplit": attack_split,
         "baseline": {
             "games": baseline["games"], "wins": baseline["wins"],
             "winrate": baseline["winrate"],

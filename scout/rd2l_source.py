@@ -343,6 +343,18 @@ def _matches_path(path=None):
     return os.path.join(root, config.RD2L_MATCHES_FILE)
 
 
+def rd2l_source_stamp():
+    """Identity of the RD2L team and match caches used by Team Scout."""
+    stamp = []
+    for path in (_cache_path(), _matches_path()):
+        try:
+            info = os.stat(path)
+            stamp.append((path, info.st_mtime_ns, info.st_size))
+        except OSError:
+            stamp.append((path, 0, 0))
+    return tuple(stamp)
+
+
 def _usable_match(payload):
     return isinstance(payload, dict) and isinstance(payload.get("players"), list) and bool(payload.get("players"))
 
@@ -416,7 +428,7 @@ def refresh_rd2l_if_new_week(path=None, season_id=None, division_id=None):
     return load_rd2l(path, force=True) is not None
 
 
-def load_rd2l(path=None, force=False):
+def load_rd2l(path=None, force=False, offline=False):
     """Cached division. Refetches when the cache is older than RD2L_CACHE_HOURS.
 
     A failed refetch keeps the previous cache. No cache and no network returns
@@ -424,7 +436,7 @@ def load_rd2l(path=None, force=False):
     """
     path = _cache_path(path)
     cached = _read_cache(path)
-    if cached and not force and _fresh(cached):
+    if offline or (cached and not force and _fresh(cached)):
         return cached
     try:
         data = fetch_rd2l()

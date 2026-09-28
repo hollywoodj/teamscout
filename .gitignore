@@ -20,6 +20,7 @@ ld2l_schedule.json
 # herodraft: the user's own exported Dota sounds, never committed
 scout/assets/sounds/*
 !scout/assets/sounds/README.md
+Music/*
 
 # Installed agent skills (mattpocock/skills)
 .agents/

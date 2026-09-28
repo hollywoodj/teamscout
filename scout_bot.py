@@ -6,8 +6,9 @@ Reads BBC's local cache only, via scout.bbc_source: Show Graphics/feed.json
 (rosters, standings, upcoming) and scrapers/.od_match_cache.json (official
 match payloads), read-only. Does not import scout.team_scout / scout.briefing,
 call OpenDota, ld2l.org, or use the BBC production bot token in-process, with
-two exceptions: `--sync-hero-emojis` (fetches hero art from OpenDota/Steam,
-uploads it as Discord application emojis) and briefing snapshot rendering,
+three exceptions: `--sync-hero-emojis` (fetches hero art from OpenDota/Steam,
+uploads it as Discord application emojis), `--sync-medal-emojis` (fetches Dota
+medal art and uploads it as application emojis), and briefing snapshot rendering,
 which always shells out to `python -m scout.briefing_cli` as a subprocess
 rather than importing it.
 
@@ -39,6 +40,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from scout.bbc_source import bbc_source_paths
+from scout.medals import medal_label, medal_prefix
 
 
 def project_root() -> Path:
@@ -51,8 +53,9 @@ MAX_MESSAGE = 1900
 SNOWFLAKE_RE = re.compile(r"^\d{17,20}$")
 INVITE_URL = (
     "https://discord.com/oauth2/authorize?client_id=1550190834018689034"
-    "&permissions=2048&scope=bot%20applications.commands"
+    "&permissions=379904&scope=bot%20applications.commands"
 )
+DEFAULT_SCOUTING_REPORT_TEAM = "Team Anony: Fun Police"
 
 log = logging.getLogger("scout_bot")
 
@@ -121,6 +124,24 @@ def team_names(feed=None):
             if name and key and key not in seen:
                 seen.add(key)
                 names.append(name)
+    return names
+
+
+def report_team_names(rd2l=None):
+    """Offer RD2L teams alongside LD2L names in report autocomplete."""
+    names = team_names()
+    seen = {team_key(name) for name in names}
+    if rd2l is None:
+        try:
+            rd2l = _read_json(project_root() / "rd2l_cache.json")
+        except (OSError, ValueError):
+            rd2l = {}
+    for row in (rd2l or {}).get("teams") or []:
+        name = str(row.get("name") or "").strip() if isinstance(row, dict) else ""
+        key = team_key(name)
+        if key and key not in seen:
+            names.append(name)
+            seen.add(key)
     return names
 
 
@@ -222,11 +243,16 @@ def format_roster(query, feed=None):
     if not roster:
         return header + "\nNo posted roster in the current upcoming matchups."
     lines = [header]
+    medal_emoji = load_medal_emoji_map()
     for player in roster:
         if not isinstance(player, dict):
             continue
         mark = " (C)" if player.get("captain") else ""
-        lines.append(f"- {player.get('name') or '?'}{mark}")
+        tier = player.get("medal")
+        badge = medal_prefix(tier, medal_emoji)
+        rank = medal_label(tier)
+        lines.append(f"- {badge}{player.get('name') or '?'}{mark}"
+                     + (f" · {rank}" if rank else ""))
     return "\n".join(lines)
 
 
@@ -292,6 +318,8 @@ def load_scout_env():
         "application_id": os.getenv("SCOUT_BOT_APPLICATION_ID", "").strip(),
         "guild_id": os.getenv("SCOUT_BOT_GUILD_ID", "").strip(),
         "channel_id": os.getenv("SCOUT_BOT_CHANNEL_ID", "").strip(),
+        "extra_guild_id": os.getenv("SCOUT_BOT_EXTRA_GUILD_ID", "").strip(),
+        "extra_channel_id": os.getenv("SCOUT_BOT_EXTRA_CHANNEL_ID", "").strip(),
     }
 
 
@@ -339,12 +367,12 @@ def require_scout_channel(channel_id):
     return deco
 
 
-async def resolve_scout_channel(client, channel_id):
+async def resolve_scout_channel(client, channel_id, force_fetch=False):
     import discord
 
     cid = int(channel_id)
     channel = client.get_channel(cid)
-    if channel is None:
+    if channel is None or force_fetch:
         try:
             channel = await client.fetch_channel(cid)
         except discord.NotFound as exc:
@@ -365,7 +393,7 @@ async def resolve_scout_channel(client, channel_id):
     return channel, guild
 
 
-def register_commands(tree, guild, channel_id=""):
+def register_commands(tree, guild, channel_id="", default_team=DEFAULT_SCOUTING_REPORT_TEAM):
     import discord
     from discord import app_commands
 
@@ -378,6 +406,11 @@ def register_commands(tree, guild, channel_id=""):
             for name in team_names()
             if cur in name.lower()
         ][:25]
+
+    async def report_team_autocomplete(interaction: discord.Interaction, current: str):
+        cur = current.lower()
+        return [app_commands.Choice(name=name[:100], value=name[:100])
+                for name in report_team_names() if cur in name.lower()][:25]
 
     @tree.command(name="week", description="Current LD2L week from the BBC feed cache", guild=guild)
     @gate
@@ -409,11 +442,7 @@ def register_commands(tree, guild, channel_id=""):
         await interaction.response.defer()
         await interaction.followup.send(clip(format_recent(team)))
 
-    @tree.command(name="briefing", description="Post a Team Scout scouting briefing", guild=guild)
-    @app_commands.describe(team="Team to scout", vs="Opponent (optional - defaults to the current matchup)")
-    @app_commands.autocomplete(team=team_autocomplete, vs=team_autocomplete)
-    @gate
-    async def briefing_cmd(interaction: discord.Interaction, team: str, vs: str = None):
+    async def post_report_command(interaction, team, vs, command_name):
         await interaction.response.defer(ephemeral=True)
         try:
             meta = await render_snapshot_async(team, vs=vs)
@@ -424,11 +453,36 @@ def register_commands(tree, guild, channel_id=""):
             token = cfg["token"]
             channel_id = require_snowflake(str(interaction.channel_id), "channel_id")
             body, files = build_message_body(snap["briefing"], snap["dir"], meta["id"], "briefing")
-            await asyncio.to_thread(_post_multipart_message, channel_id, token, body, files)
-            await interaction.followup.send("Posted.", ephemeral=True)
+            _posted, errors = await asyncio.to_thread(
+                _post_replacing_briefing, channel_id, token, body, files,
+            )
+            reply = ("Posted. Earlier reports could not all be removed; check the bot log."
+                     if errors else "Posted. Earlier scouting reports removed.")
+            await interaction.followup.send(reply, ephemeral=True)
         except Exception as exc:
-            log.exception("/briefing failed")
-            await interaction.followup.send(f"Failed to post briefing: {exc}", ephemeral=True)
+            log.exception("/%s failed", command_name)
+            await interaction.followup.send(f"Failed to post scouting report: {exc}", ephemeral=True)
+
+    @tree.command(name="briefing", description="Post a Team Scout scouting briefing", guild=guild)
+    @app_commands.describe(team="Team to scout", vs="Opponent (optional - defaults to the current matchup)")
+    @app_commands.autocomplete(team=report_team_autocomplete, vs=report_team_autocomplete)
+    @gate
+    async def briefing_cmd(interaction: discord.Interaction, team: str, vs: str = None):
+        await post_report_command(interaction, team, vs, "briefing")
+
+    @tree.command(name="scoutingreport", description="Post the scouting report with Briefing, Wards and Recon", guild=guild)
+    @app_commands.describe(team="Team to scout (defaults to the current prototype)",
+                           vs="Opponent (optional - defaults to the current matchup)")
+    @app_commands.autocomplete(team=report_team_autocomplete, vs=report_team_autocomplete)
+    @gate
+    async def scoutingreport_cmd(interaction: discord.Interaction, team: str = None,
+                                 vs: str = None):
+        selected_team = team or default_team
+        if not selected_team:
+            await interaction.response.send_message(
+                "Choose a team to scout with the `team` option.", ephemeral=True)
+            return
+        await post_report_command(interaction, selected_team, vs, "scoutingreport")
 
     @tree.error
     async def on_app_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
@@ -451,6 +505,10 @@ def run():
     try:
         guild_id = require_snowflake(cfg["guild_id"], "SCOUT_BOT_GUILD_ID")
         channel_id = require_snowflake(cfg["channel_id"], "SCOUT_BOT_CHANNEL_ID")
+        extra_guild_id = require_snowflake(cfg["extra_guild_id"], "SCOUT_BOT_EXTRA_GUILD_ID")
+        extra_channel_id = require_snowflake(cfg["extra_channel_id"], "SCOUT_BOT_EXTRA_CHANNEL_ID")
+        if bool(extra_guild_id) != bool(extra_channel_id):
+            raise ValueError("SCOUT_BOT_EXTRA_GUILD_ID and SCOUT_BOT_EXTRA_CHANNEL_ID must be set together")
     except ValueError as exc:
         log.error("%s", exc)
         sys.exit(1)
@@ -459,11 +517,14 @@ def run():
     tree = discord.app_commands.CommandTree(client)
     guild = discord.Object(id=int(guild_id)) if guild_id else None
     register_commands(tree, guild, channel_id)
+    if extra_guild_id:
+        register_commands(tree, discord.Object(id=int(extra_guild_id)), extra_channel_id,
+                          default_team=None)
     startup_error = []
 
     @client.event
     async def on_interaction(interaction):
-        # Briefing/Wards tab-row buttons: handled raw (REST callback,
+        # Briefing/Wards/Recon tab-row buttons: handled raw (REST callback,
         # type 7 UPDATE_MESSAGE) because they swap the whole Components V2
         # body. No View is registered for these custom_ids, so discord.py's
         # own component dispatch never tries to respond to them too.
@@ -499,6 +560,19 @@ def run():
                 where = "global (can take up to an hour)"
             log.info("scout bot ready as %s — %d command(s) synced %s",
                      client.user, len(synced), where)
+            if extra_guild_id:
+                try:
+                    extra_channel, extra_guild = await resolve_scout_channel(
+                        client, extra_channel_id, force_fetch=True)
+                    if str(extra_guild.id) != extra_guild_id:
+                        raise RuntimeError("Extra scout channel belongs to another server")
+                    log.info("extra scout channel ok: #%s (%s) in guild %s",
+                             getattr(extra_channel, "name", "?"), extra_channel_id, extra_guild_id)
+                except RuntimeError as exc:
+                    log.warning("extra scout channel access pending: %s", exc)
+                extra_synced = await tree.sync(guild=discord.Object(id=int(extra_guild_id)))
+                log.info("scout bot ready as %s — %d command(s) synced guild %s",
+                         client.user, len(extra_synced), extra_guild_id)
         except Exception as exc:
             log.exception("scout bot startup failed")
             startup_error.append(exc)
@@ -526,8 +600,10 @@ def _team_scout_root() -> Path:
 # --------------------------------------------------------------------------
 
 SNAPSHOT_ROOT = project_root() / "cache" / "scout_briefings"
-CUSTOM_ID_RE = re.compile(r"^sb:tab:(briefing|wards):([0-9a-f]{12})$")
-TAB_LABELS = {"briefing": ("Briefing", "\U0001F4CB"), "wards": ("Wards", "\U0001F5FA️")}
+CUSTOM_ID_RE = re.compile(r"^sb:tab:(briefing|wards|recon):([0-9a-f]{12})$")
+WARD_VIEW_ID_RE = re.compile(r"^sb:ward-view:(heatmap|individual):([0-9a-f]{12})$")
+TAB_LABELS = {"briefing": ("Briefing", "\U0001F4CB"), "wards": ("Wards", "\U0001F5FA️"),
+              "recon": ("Recon", "\U0001F50E")}
 V2_FLAG = 1 << 15
 
 
@@ -536,9 +612,20 @@ def _emoji_map_path():
     return path if path.exists() else None
 
 
-def _portraits_path():
-    path = HERO_EMOJI_CACHE_DIR / "portraits.json"
+def _medal_emoji_map_path():
+    path = MEDAL_EMOJI_CACHE_DIR / "emoji_map.json"
     return path if path.exists() else None
+
+
+def load_medal_emoji_map():
+    path = _medal_emoji_map_path()
+    if path is None:
+        return {}
+    try:
+        data = _read_json(path)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _snapshot_argv(team, vs, out_dir):
@@ -551,9 +638,9 @@ def _snapshot_argv(team, vs, out_dir):
     emoji_map = _emoji_map_path()
     if emoji_map:
         argv += ["--emoji-map", str(emoji_map)]
-    portraits = _portraits_path()
-    if portraits:
-        argv += ["--portraits", str(portraits)]
+    medal_emoji_map = _medal_emoji_map_path()
+    if medal_emoji_map:
+        argv += ["--medal-emoji-map", str(medal_emoji_map)]
     return argv
 
 
@@ -624,7 +711,27 @@ def load_snapshot(snapshot_id):
             wards_doc = json.load(handle)
     except (OSError, ValueError):
         return None
-    return {"dir": snap_dir, "meta": meta, "briefing": briefing_doc, "wards": wards_doc}
+    try:
+        with (snap_dir / "recon.json").open(encoding="utf-8") as handle:
+            recon_doc = json.load(handle)
+    except FileNotFoundError:
+        # Snapshots posted before Recon was added still have working tabs.
+        recon_doc = {"components": [{"type": 17, "accent_color": 0xE74C3C,
+                     "components": [{"type": 10, "content":
+                     "Recon was added after this briefing. Run /briefing again to see it."}]}],
+                     "attachments": []}
+    except (OSError, ValueError):
+        return None
+    try:
+        with (snap_dir / "wards_individual.json").open(encoding="utf-8") as handle:
+            wards_individual_doc = json.load(handle)
+    except FileNotFoundError:
+        wards_individual_doc = None
+    except (OSError, ValueError):
+        return None
+    return {"dir": snap_dir, "meta": meta, "briefing": briefing_doc,
+            "wards": wards_doc, "wards_individual": wards_individual_doc,
+            "recon": recon_doc}
 
 
 # --------------------------------------------------------------------------
@@ -699,10 +806,21 @@ def tab_row(snapshot_id, active_tab):
     return {"type": 1, "components": buttons}
 
 
-def build_message_body(page_doc, snapshot_dir, snapshot_id, active_tab):
+def ward_view_row(snapshot_id, active_view):
+    return {"type": 1, "components": [
+        {"type": 2, "style": 1 if view == active_view else 2,
+         "label": label, "custom_id": f"sb:ward-view:{view}:{snapshot_id}"}
+        for view, label in (("heatmap", "Heatmap"), ("individual", "Individual Wards"))
+    ]}
+
+
+def build_message_body(page_doc, snapshot_dir, snapshot_id, active_tab,
+                       ward_view="heatmap", ward_toggle=False):
     """{"flags": ..., "components": [container, tab_row], "attachments":
     [...]} plus the (filename, bytes) files to send multipart alongside it."""
     components = list(page_doc.get("components") or []) + [tab_row(snapshot_id, active_tab)]
+    if active_tab == "wards" and ward_toggle:
+        components.append(ward_view_row(snapshot_id, ward_view))
     attachments_meta = []
     files = []
     for i, filename in enumerate(page_doc.get("attachments") or []):
@@ -751,9 +869,127 @@ def _post_multipart_message(channel_id, token, body, files):
         raise RuntimeError(f"Discord POST failed: {exc.code} {detail}") from exc
 
 
+def _is_scout_briefing(message):
+    """Identify current tabbed reports and legacy Scout briefing embeds."""
+    def has_tab(nodes):
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            if str(node.get("custom_id") or "").startswith("sb:tab:"):
+                return True
+            if has_tab(node.get("components") or []):
+                return True
+        return False
+
+    if has_tab(message.get("components") or []):
+        return True
+    for embed in message.get("embeds") or []:
+        if not isinstance(embed, dict):
+            continue
+        author = (embed.get("author") or {}).get("name") or ""
+        footer = (embed.get("footer") or {}).get("text") or ""
+        if author.startswith("🔎 SCOUT BRIEFING") and footer.startswith("Team Scout ·"):
+            return True
+    return False
+
+
+def _discord_open(request):
+    """Respect Discord's retry interval during briefing history cleanup."""
+    for attempt in range(5):
+        try:
+            return urllib.request.urlopen(request, timeout=20)
+        except urllib.error.HTTPError as exc:
+            if exc.code != 429 or attempt == 4:
+                raise
+            retry = exc.headers.get("Retry-After") if exc.headers else None
+            if retry is None:
+                try:
+                    retry = json.loads(exc.read().decode("utf-8")).get("retry_after")
+                except (ValueError, AttributeError):
+                    retry = None
+            try:
+                delay = float(retry)
+            except (TypeError, ValueError):
+                delay = 1.0
+            time.sleep(max(0.2, min(delay, 30.0)))
+
+
+def _channel_messages(channel_id, token, before=None):
+    url = f"https://discord.com/api/v10/channels/{channel_id}/messages?limit=100"
+    if before:
+        url += f"&before={before}"
+    request = urllib.request.Request(url, headers={
+        "Authorization": f"Bot {token}", "User-Agent": "DiscordBot (local, 1)",
+    })
+    with _discord_open(request) as response:
+        return json.load(response)
+
+
+def _delete_briefing_message(channel_id, token, message_id):
+    url = f"https://discord.com/api/v10/channels/{channel_id}/messages/{message_id}"
+    request = urllib.request.Request(url, method="DELETE", headers={
+        "Authorization": f"Bot {token}", "User-Agent": "DiscordBot (local, 1)",
+    })
+    try:
+        with _discord_open(request):
+            pass
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404:  # Already removed by another post is fine.
+            raise
+
+
+def _remove_older_briefings(channel_id, token, posted):
+    """Keep the newest Scout Bot briefing in the configured channel."""
+    keep_id = str(posted.get("id") or "")
+    author_id = str((posted.get("author") or {}).get("id") or "")
+    if not keep_id.isdigit() or not author_id:
+        return 0, ["Discord did not return the new message and author IDs"]
+    removed, errors, before = 0, [], None
+    while True:
+        try:
+            rows = _channel_messages(channel_id, token, before)
+        except (OSError, ValueError) as exc:
+            errors.append(f"Could not read channel history: {exc}")
+            break
+        if not isinstance(rows, list):
+            errors.append("Discord returned invalid channel history")
+            break
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            message_id = str(row.get("id") or "")
+            if (not message_id.isdigit() or int(message_id) >= int(keep_id)
+                    or str((row.get("author") or {}).get("id") or "") != author_id
+                    or not _is_scout_briefing(row)):
+                continue
+            try:
+                _delete_briefing_message(channel_id, token, message_id)
+                removed += 1
+            except OSError as exc:
+                errors.append(f"Could not remove message {message_id}: {exc}")
+        if len(rows) < 100:
+            break
+        next_before = str((rows[-1] or {}).get("id") or "")
+        if not next_before.isdigit() or next_before == before:
+            errors.append("Could not continue channel history scan")
+            break
+        before = next_before
+    return removed, errors
+
+
+def _post_replacing_briefing(channel_id, token, body, files):
+    posted = _post_multipart_message(channel_id, token, body, files)
+    removed, errors = _remove_older_briefings(channel_id, token, posted)
+    for error in errors:
+        log.warning("briefing cleanup: %s", error)
+    log.info("Posted briefing to channel %s, message id %s; removed %d earlier briefing(s)",
+             channel_id, posted.get("id"), removed)
+    return posted, errors
+
+
 def post_briefing(team, vs=None, dry_run=False):
     """One-shot CLI path (no gateway login): render a snapshot and either
-    preview both pages or post the Briefing page to the scout channel."""
+    preview all pages or post the Briefing page to the scout channel."""
     try:
         meta = render_snapshot(team, vs=vs)
     except RuntimeError as exc:
@@ -766,7 +1002,7 @@ def post_briefing(team, vs=None, dry_run=False):
         sys.exit(1)
 
     if dry_run:
-        for name in ("briefing", "wards"):
+        for name in TAB_LABELS:
             doc = snap[name]
             print(f"=== {name} ===")
             print(render_components_text(doc["components"]))
@@ -793,25 +1029,30 @@ def post_briefing(team, vs=None, dry_run=False):
 
     body, files = build_message_body(snap["briefing"], snap["dir"], meta["id"], "briefing")
     try:
-        result = _post_multipart_message(channel_id, token, body, files)
-        log.info("Posted briefing to channel %s, message id %s", channel_id, result.get("id"))
+        _posted, errors = _post_replacing_briefing(channel_id, token, body, files)
+        if errors:
+            log.warning("Briefing posted, but earlier messages may remain in the scout channel")
     except RuntimeError as exc:
         log.error("%s", exc)
         sys.exit(1)
 
 
 async def handle_tab_interaction(interaction):
-    """Component interactions for the Briefing/Wards tab row: responds
+    """Component interactions for the Briefing/Wards/Recon tab row: responds
     directly over the REST interaction-callback endpoint (type 7,
     UPDATE_MESSAGE) instead of discord.py's response wrapper, since this
     swaps the whole Components V2 body (and attachments) in place."""
     import aiohttp
 
     custom_id = (getattr(interaction, "data", None) or {}).get("custom_id", "")
-    match = CUSTOM_ID_RE.match(custom_id)
-    if not match:
+    tab_match = CUSTOM_ID_RE.match(custom_id)
+    view_match = WARD_VIEW_ID_RE.match(custom_id)
+    if not tab_match and not view_match:
         return False
-    tab, snapshot_id = match.group(1), match.group(2)
+    if view_match:
+        tab, ward_view, snapshot_id = "wards", view_match.group(1), view_match.group(2)
+    else:
+        tab, ward_view, snapshot_id = tab_match.group(1), "heatmap", tab_match.group(2)
     callback_url = f"https://discord.com/api/v10/interactions/{interaction.id}/{interaction.token}/callback"
 
     async with aiohttp.ClientSession() as session:
@@ -825,7 +1066,11 @@ async def handle_tab_interaction(interaction):
                 await resp.read()
             return True
 
-        body, files = build_message_body(snap[tab], snap["dir"], snapshot_id, tab)
+        page = (snap["wards_individual"] if ward_view == "individual"
+                and snap["wards_individual"] is not None else snap[tab])
+        body, files = build_message_body(page, snap["dir"], snapshot_id, tab,
+                                         ward_view=ward_view,
+                                         ward_toggle=snap["wards_individual"] is not None)
         if tab == "briefing":
             body["attachments"] = []
             files = []
@@ -849,10 +1094,48 @@ async def handle_tab_interaction(interaction):
 OPENDOTA_HEROES_URL = "https://api.opendota.com/api/constants/heroes"
 STEAM_CDN_BASE = "https://cdn.cloudflare.steamstatic.com"
 HERO_EMOJI_CACHE_DIR = project_root() / "cache" / "scout_hero_emojis"
+MEDAL_EMOJI_CACHE_DIR = project_root() / "cache" / "scout_medal_emojis"
+RANK_ICON_CACHE_DIR = project_root() / "cache" / "rank_icons"
+RANK_ICON_URL = "https://www.opendota.com/assets/images/dota2/rank_icons/"
 EMOJI_MAX_BYTES = 256 * 1024
-CROP_SIZE = 144
+CROP_SIZE = 112
 FINAL_SIZE = 128
 CONTACT_SHEET_COLS = 12
+
+# Focal points in the 256x144 source art. Most hero faces sit near (128, 70),
+# but these portraits put the face noticeably to one side. The optional third
+# number keeps wide or multiple faces in frame. Values scale for small art.
+HERO_FACE_CROPS = {
+    1: (145, 67),    # Anti-Mage
+    7: (144, 74),    # Earthshaker
+    8: (147, 76),    # Juggernaut
+    12: (148, 68),   # Phantom Lancer
+    14: (122, 75, 128),  # Pudge
+    15: (204, 75),   # Razor
+    16: (106, 80),   # Sand King
+    18: (177, 76),   # Sven
+    25: (68, 70),    # Lina
+    29: (130, 79, 128),  # Tidehunter
+    43: (198, 68),   # Death Prophet
+    46: (107, 69),   # Templar Assassin
+    54: (113, 78),   # Lifestealer
+    58: (101, 73),   # Enchantress
+    61: (135, 75, 128),  # Broodmother
+    64: (128, 74, 144),  # Jakiro: two heads
+    70: (83, 80),    # Ursa
+    73: (128, 76, 144),  # Alchemist: two faces
+    80: (155, 74),   # Lone Druid
+    90: (103, 72),   # Keeper of the Light
+    91: (128, 72, 144),  # Io: full light form
+    97: (157, 77),   # Magnus
+    105: (194, 74),  # Techies: focus the front goblin
+    110: (119, 77, 128),  # Phoenix
+    119: (102, 72),  # Dark Willow
+    121: (174, 75),  # Grimstroke
+    123: (99, 77),   # Hoodwink
+    131: (109, 74),  # Ringmaster
+    137: (138, 80, 136),  # Primal Beast
+}
 
 
 def _http_get_json(url, timeout=30):
@@ -937,18 +1220,28 @@ def sanitize_emoji_name(hero_internal_name):
     return f"h_{short}"[:32]
 
 
-def crop_hero_portrait(image_bytes):
-    """Center-crop a hero portrait (OpenDota's 256x144 "img") to its middle
-    144x144 square, shifted 8px up (more headroom, less foreground clutter),
-    then resize to 128x128. Returns PNG bytes, kept under 256KB."""
+def face_emoji_name(hero_internal_name):
+    """New namespace so old snapshots keep their existing emoji IDs."""
+    return ("hf_" + sanitize_emoji_name(hero_internal_name)[2:])[:32]
+
+
+def crop_hero_portrait(image_bytes, hero_id=None):
+    """Crop around the hero's face, then resize to a 128x128 Discord emoji.
+
+    Focal points use the 256x144 art as a reference and scale with source size.
+    They replace the old fixed center crop, which clipped off-center faces.
+    """
     from PIL import Image
 
     img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
     w, h = img.size
-    size = min(CROP_SIZE, w, h)
-    cx = max(0, (w - size) // 2)
-    cy = max(0, (h - size) // 2 - 8)
-    box = (cx, cy, cx + size, cy + size)
+    focal = HERO_FACE_CROPS.get(int(hero_id), (128, 70)) if hero_id is not None else (128, 70)
+    scale = min(w / 256, h / 144)
+    size = max(1, min(w, h, round((focal[2] if len(focal) == 3 else CROP_SIZE) * scale)))
+    center_x, center_y = round(focal[0] * w / 256), round(focal[1] * h / 144)
+    left = min(max(center_x - size // 2, 0), w - size)
+    top = min(max(center_y - size // 2, 0), h - size)
+    box = (left, top, left + size, top + size)
     cropped = img.crop(box)
     if cropped.size != (size, size):
         cropped = cropped.resize((size, size), Image.LANCZOS)
@@ -1026,7 +1319,7 @@ def build_contact_sheet(crops, out_path):
 def sync_hero_emojis():
     """Download every OpenDota hero portrait, crop/resize it to a 128x128
     Discord emoji, and upload any that don't already exist as Scout Bot
-    application emojis. Writes emoji_map.json ({hero_id: "<:h_x:id>"}),
+    application emojis. Writes emoji_map.json ({hero_id: "<:hf_x:id>"}),
     portraits.json ({hero_id: portrait URL}), and a contact_sheet.png of
     every crop. Idempotent: re-running only uploads names that are missing.
     Returns (created, skipped, emoji_map)."""
@@ -1067,7 +1360,7 @@ def sync_hero_emojis():
         portraits[str(hero_id)] = portrait_url
 
         internal_name = hero.get("name") or f"npc_dota_hero_{hero_id}"
-        emoji_name = sanitize_emoji_name(internal_name)
+        emoji_name = face_emoji_name(internal_name)
 
         src_file = src_dir / f"{hero_id}.png"
         if not src_file.exists():
@@ -1076,7 +1369,7 @@ def sync_hero_emojis():
         else:
             image_bytes = src_file.read_bytes()
 
-        cropped_bytes = crop_hero_portrait(image_bytes)
+        cropped_bytes = crop_hero_portrait(image_bytes, hero_id)
         crops.append((hero_id, emoji_name, cropped_bytes))
 
         if emoji_name in existing_by_name:
@@ -1100,6 +1393,65 @@ def sync_hero_emojis():
     return created, skipped, emoji_map
 
 
+def _rank_icon(name):
+    """Read cached OpenDota medal art, fetching a missing image once."""
+    path = RANK_ICON_CACHE_DIR / f"{name}.png"
+    if path.exists():
+        return path.read_bytes()
+    data = _http_get_bytes(RANK_ICON_URL + name + ".png")
+    RANK_ICON_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    return data
+
+
+def render_medal_emoji(tier):
+    """Combine Dota's medal shield and star overlay into one Discord PNG."""
+    from PIL import Image
+
+    base = Image.open(io.BytesIO(_rank_icon(f"rank_icon_{tier // 10}"))).convert("RGBA")
+    base = base.resize((FINAL_SIZE, FINAL_SIZE), Image.LANCZOS)
+    if tier < 80:
+        star = Image.open(io.BytesIO(_rank_icon(f"rank_star_{tier % 10}"))).convert("RGBA")
+        star = star.resize((FINAL_SIZE, FINAL_SIZE), Image.LANCZOS)
+        base.alpha_composite(star)
+    buf = io.BytesIO()
+    base.save(buf, format="PNG", optimize=True)
+    data = buf.getvalue()
+    if len(data) > EMOJI_MAX_BYTES:
+        buf = io.BytesIO()
+        base.convert("P", palette=Image.ADAPTIVE, colors=256).save(
+            buf, format="PNG", optimize=True)
+        data = buf.getvalue()
+    return data
+
+
+def sync_medal_emojis():
+    """Upload missing Dota medal emojis and save a rank-tier token map."""
+    cfg = load_scout_env()
+    token = cfg["token"]
+    app_id = cfg["application_id"]
+    if not token or not app_id:
+        raise RuntimeError("SCOUT_BOT_TOKEN and SCOUT_BOT_APPLICATION_ID are required")
+    existing = {e["name"]: e["id"] for e in list_application_emojis(app_id, token)}
+    emoji_map = {}
+    created = skipped = 0
+    for tier in [10 * rank + star for rank in range(1, 8)
+                 for star in range(1, 6)] + [80]:
+        name = f"medal_{tier}"
+        if name in existing:
+            skipped += 1
+        else:
+            emoji = create_application_emoji(app_id, token, name,
+                                             render_medal_emoji(tier))
+            existing[name] = emoji["id"]
+            created += 1
+        emoji_map[str(tier)] = f"<:{name}:{existing[name]}>"
+    MEDAL_EMOJI_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    with (MEDAL_EMOJI_CACHE_DIR / "emoji_map.json").open("w", encoding="utf-8") as handle:
+        json.dump(emoji_map, handle)
+    return created, skipped, emoji_map
+
+
 def build_arg_parser():
     parser = argparse.ArgumentParser(description="Team Scout Discord bot")
     parser.add_argument(
@@ -1118,6 +1470,8 @@ def build_arg_parser():
         "--sync-hero-emojis", action="store_true",
         help="Download OpenDota hero art and upload/sync Scout Bot application emojis",
     )
+    parser.add_argument("--sync-medal-emojis", action="store_true",
+                        help="Upload/sync Dota rank medals as Scout Bot application emojis")
     return parser
 
 
@@ -1132,6 +1486,10 @@ def main():
     if args.sync_hero_emojis:
         created, skipped, _emoji_map = sync_hero_emojis()
         print(f"Hero emoji sync: {created} created, {skipped} skipped.")
+        return
+    if args.sync_medal_emojis:
+        created, skipped, _emoji_map = sync_medal_emojis()
+        print(f"Medal emoji sync: {created} created, {skipped} skipped.")
         return
     if args.post_briefing:
         post_briefing(args.post_briefing, vs=args.vs, dry_run=args.dry_run)

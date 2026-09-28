@@ -2,21 +2,24 @@
 payload. Pure functions, no network, no Discord import - the caller (the
 bot) owns posting.
 
-Two pages are produced, each a single Container component:
-  build_briefing_page() - team profile, draft, players, key reads.
-  build_wards_page()    - ward placement summary + a rendered PNG map sheet.
+Three pages are produced, each a single Container component:
+  build_briefing_page() - league ranks, key reads, draft, compact player summaries.
+  build_wards_page()    - separate Radiant/Dire map images for every player.
+  build_recon_page()    - this week's public games for the opponent roster.
 
 Stat computation (the _*_stats helpers) is kept separate from rendering (the
 _*_lines / build_* functions) so either can change independently.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from .bbc_source import team_key as _team_key
+from .medals import medal_prefix
+from .team_rankings import team_rankings
 from .ward_render import (
     ward_patch_id as _ward_patch_id,
     player_side_wards as _player_side_wards,
-    render_ward_sheet as _render_ward_sheet,
+    render_player_ward_rows as _render_player_ward_rows,
     select_map_players as _select_map_players,
 )
 
@@ -96,39 +99,6 @@ def _find_team(payload, query):
         return candidates[0]
 
     raise ValueError(f"No team found matching {query!r}")
-
-
-def _team_by_key(payload, key):
-    for row in payload.get("teams") or []:
-        if row.get("key") == key:
-            return row
-    return None
-
-
-def _find_matchup_opponent(payload, key):
-    for matchup in payload.get("matchups") or []:
-        if matchup.get("aKey") == key:
-            other_key = matchup.get("bKey")
-            row = _team_by_key(payload, other_key)
-            if row:
-                return row
-            return {"key": other_key, "name": matchup.get("b"),
-                    "short": matchup.get("bShort"), "record": ""}
-        if matchup.get("bKey") == key:
-            other_key = matchup.get("aKey")
-            row = _team_by_key(payload, other_key)
-            if row:
-                return row
-            return {"key": other_key, "name": matchup.get("a"),
-                    "short": matchup.get("aShort"), "record": ""}
-    return None
-
-
-def _standing_for(payload, key):
-    for row in payload.get("standings") or []:
-        if row.get("key") == key:
-            return row
-    return {}
 
 
 # --------------------------------------------------------------------------
@@ -267,24 +237,6 @@ def _fmt_duration(seconds):
     return f"{seconds // 60}:{seconds % 60:02d}"
 
 
-def _form_strip_and_streak(sample):
-    # sample is newest-first: (entry, our_side, opp_side)
-    results_desc = [_side_win(entry, our_side) for entry, our_side, _ in sample]
-    last5 = list(reversed(results_desc[:5]))  # oldest -> newest
-    strip = "".join("\U0001F7E9" if win else "\U0001F7E5" for win in last5)
-    streak = ""
-    if results_desc:
-        first = results_desc[0]
-        count = 0
-        for win in results_desc:
-            if win == first:
-                count += 1
-            else:
-                break
-        streak = f"{'W' if first else 'L'}{count}"
-    return strip, streak
-
-
 def _radiant_dire_split(sample):
     r_w = r_g = d_w = d_g = 0
     for entry, our_side, _opp in sample:
@@ -378,7 +330,7 @@ def _player_position_mode(rows):
 
 
 def _hero_wl_stats(rows):
-    """Top 3 heroes by games from official rows: [(hero_id, games, wins)]."""
+    """Official heroes by win rate, then games: [(hero_id, games, wins)]."""
     stats = {}
     for row in rows:
         hero_id = row.get("hero_id")
@@ -388,22 +340,12 @@ def _hero_wl_stats(rows):
         bucket[0] += 1
         if row.get("result") == "W":
             bucket[1] += 1
-    ranked = sorted(stats.items(), key=lambda kv: -kv[1][0])[:3]
+    ranked = sorted(stats.items(), key=lambda kv: (-kv[1][1] / kv[1][0], -kv[1][0]))
     return [(hid, games, wins) for hid, (games, wins) in ranked]
 
 
-def _hero_pool_wl_stats(player):
-    heroes = ((player.get("heroPool") or {}).get("heroes")) or []
-    out = []
-    for row in heroes[:3]:
-        games = (row.get("lifetime") or {}).get("games") or 0
-        wins = (row.get("lifetime") or {}).get("wins") or 0
-        if not games:
-            games = (row.get("recent") or {}).get("games") or 0
-            wins = (row.get("recent") or {}).get("wins") or 0
-        hero_id = row.get("id")
-        out.append((hero_id, games, wins))
-    return out
+def _hero_result(hero_id, games, wins, heroes_map, hero_emoji):
+    return f"{_hero_token(heroes_map, hero_emoji, hero_id)} {wins}-{games - wins}"
 
 
 def _tf_bar(pct):
@@ -641,34 +583,8 @@ def _text_chars(nodes):
 # --------------------------------------------------------------------------
 
 def _header_lines(official_source, team_row):
-    week = official_source.get("week")
-    league = official_source.get("league") or team_row.get("league") or "League"
-    return f"-# \U0001F50E SCOUT BRIEFING · {league} · WEEK {week if week is not None else '?'}"
-
-
-def _record_line(team_row, standing, vs_row):
-    record = team_row.get("record") or "-"
-    rank = standing.get("rank")
-    rank_part = f"#{rank}" if rank is not None else "#?"
-    if vs_row:
-        vs_short = vs_row.get("short") or vs_row.get("name") or "?"
-        vs_record = vs_row.get("record") or "-"
-        return (f"**{record}** · {rank_part} · Up next vs "
-                f"**__{vs_short}__** ({vs_record})")
-    return f"**{record}** · {rank_part} · No upcoming matchup posted."
-
-
-def _form_line(sample):
-    strip, streak = _form_strip_and_streak(sample)
-    split = _radiant_dire_split(sample)
-    r_w, r_l, _r_g = split["radiant"]
-    d_w, d_l, _d_g = split["dire"]
-    durations = _numeric(entry.get("duration") for entry, _o, _p in sample)
-    avg_duration = sum(durations) / len(durations) if durations else None
-    games = len(sample)
-    return (f"**Form** {strip or '-'} · **{streak or '-'}**   "
-            f"**Radiant** {r_w}-{r_l} · **Dire** {d_w}-{d_l} · "
-            f"**Avg length** {_fmt_duration(avg_duration)} · **Games** {games}")
+    league = team_row.get("league") or official_source.get("league") or "League"
+    return f"-# \U0001F50E SCOUT BRIEFING · {league}"
 
 
 def _team_profile_content(stats, buckets):
@@ -677,7 +593,7 @@ def _team_profile_content(stats, buckets):
         return "-" if not g else f"{w}-{g - w}"
 
     lines = [
-        "### \U0001F4CA __Team profile__",
+        "### __Team profile__",
         (f"⚔️ **Fighting** · Kills {_fmt1(stats['kills'])} · "
          f"Deaths {_fmt1(stats['deaths'])} · Teamfight {_fmtpct(stats['tf_pct'])}% · "
          f"First blood {_fmtpct(stats['fb_pct'])}%"),
@@ -695,6 +611,31 @@ def _team_profile_content(stats, buckets):
     return "\n".join(lines)
 
 
+def _team_rankings_content(payload, key):
+    row = team_rankings(payload).get(key)
+    if not row:
+        return None
+    metrics = row["metrics"]
+
+    def place(metric):
+        value = metrics[metric]
+        return (f"#{value['rank']}/{value['total']}" if value["rank"] is not None
+                else "—")
+
+    return "\n".join([
+        "### __League ranks__",
+        f"-# {row['games']} official games · #1 means most · only teams with data count",
+        f"⚔️ **Fighting** · Win rate {place('win_rate')} · Kills {place('kills')} · "
+        f"Deaths {place('deaths')} · Teamfight {place('teamfight')} · First blood {place('first_blood')}",
+        f"👁️ **Vision** · Observers {place('observers')} · Sentries {place('sentries')} · "
+        f"Dewards {place('dewards')} · Obs lost {place('obs_lost')}",
+        f"💰 **Economy** · GPM {place('gpm')} · XPM {place('xpm')} · "
+        f"Lane efficiency {place('lane_eff')} · Stacks {place('stacks')}",
+        f"🏰 **Objectives** · Towers {place('towers')} · Roshan {place('roshan')} · "
+        f"Buybacks {place('buybacks')}",
+    ])
+
+
 def _draft_content(sample, heroes_map, hero_emoji):
     picks, bans, banned_vs = _draft_stats(sample)
 
@@ -705,94 +646,51 @@ def _draft_content(sample, heroes_map, hero_emoji):
         return " · ".join(f"{_hero_token(heroes_map, hero_emoji, hid)} {n}" for hid, n in rows)
 
     lines = [
-        "### \U0001F9E0 __Draft__",
-        f"**Picks** {render(picks)}",
-        f"**Bans** {render(bans)}",
-        f"**Banned vs** {render(banned_vs)}",
+        "### __Draft__",
+        f"**Most picked** {render(picks)}",
+        f"**Their bans** {render(bans)}",
+        f"**Banned against them** {render(banned_vs)}",
     ]
     return "\n".join(lines)
 
 
-def _player_section(player, key, heroes_map, hero_emoji, portraits):
+def _player_section(player, key, heroes_map, hero_emoji, medal_emoji=None):
     rows = _player_team_rows(player, key)
     position = _player_position_mode(rows)
     keycap = POSITION_KEYCAPS.get(position, UNKNOWN_KEYCAP)
     rank = player.get("rank") or "Unranked"
     name = player.get("name") or "Unknown"
-    header = f"{keycap} **__{name}__** · Pos {position or '?'} · {rank}"
+    medal = medal_prefix(player.get("rankTier"), medal_emoji)
+    header = f"{keycap} {medal}**__{name}__**"
+    if not medal:
+        header += f" · {rank}"
 
     if not rows:
-        hero_rows = _hero_pool_wl_stats(player)
-        hero_line = "**Heroes (pubs)** " + (
-            " · ".join(
-                f"{_hero_prefix(hero_emoji, hid)}{_hero_name(heroes_map, hid)} {w}-{g - w}"
-                for hid, g, w in hero_rows
-            ) or "no pub data"
-        )
-        content = "\n".join([header, "No official games for this team yet", hero_line])
+        hero_line = "**Heroes** No official games for this team yet"
+        content = "\n".join([header, hero_line])
     else:
-        k = _avg_field(rows, "kills")
-        d = _avg_field(rows, "deaths")
-        a = _avg_field(rows, "assists")
         kda = _player_kda(rows)
         gpm = _avg_field(rows, "gpm")
-        tf_raw = _avg_field(rows, "teamfight")
-        tf_pct = None if tf_raw is None else (tf_raw * 100 if tf_raw <= 1 else tf_raw)
-        bar = _tf_bar(tf_pct)
+        stats_line = (f"**Stats** {kda:.1f} KDA · {_fmtint(gpm)} GPM · "
+                      f"{len(rows)} game{'s' if len(rows) != 1 else ''}")
 
-        combat_line = (f"**Combat** {_fmt1(k)} / {_fmt1(d)} / {_fmt1(a)} · "
-                        f"KDA {kda:.1f} · {_fmtint(gpm)} GPM")
-        tf_line = f"**Teamfight** {_fmtpct(tf_pct)}% {bar}"
-
-        obs = _avg_field(rows, "obs_placed")
-        sen = _avg_field(rows, "sen_placed")
-        obs_kills = _sum_field(rows, "obs_kills")
-        sen_kills = _sum_field(rows, "sen_kills")
-        dewards_per_game = (obs_kills + sen_kills) / len(rows) if rows else None
-        stuns = _avg_field(rows, "stuns")
-        stacks = _avg_field(rows, "camps_stacked")
-        vision_line = (f"**Vision** {_fmt1(obs)} obs · {_fmt1(sen)} sen · "
-                        f"{_fmt1(dewards_per_game)} dewards · "
-                        f"**Utility** {_fmt1(stuns)}s stuns · {_fmt1(stacks)} stacks")
-
-        if len(rows) < 2:
-            hero_rows = _hero_pool_wl_stats(player)
-            label = "**Heroes (pubs)**"
-        else:
-            hero_rows = _hero_wl_stats(rows)
-            label = "**Heroes**"
-        heroes_line = label + " " + (
+        hero_rows = _hero_wl_stats(rows)
+        heroes_line = "**Heroes** " + (
             " · ".join(
-                f"{_hero_prefix(hero_emoji, hid)}{_hero_name(heroes_map, hid)} {w}-{g - w}"
+                _hero_result(hid, g, w, heroes_map, hero_emoji)
                 for hid, g, w in hero_rows
             ) or "-"
         )
 
-        content = "\n".join([header, combat_line, tf_line, vision_line, heroes_line])
+        content = "\n".join([header, stats_line, heroes_line])
 
-    portrait_url = None
-    if portraits:
-        best_hero = None
-        best_games = -1
-        counts = {}
-        for row in rows:
-            hid = row.get("hero_id")
-            if hid is None:
-                continue
-            counts[hid] = counts.get(hid, 0) + 1
-        for hid, games in counts.items():
-            if games > best_games:
-                best_games = games
-                best_hero = hid
-        if best_hero is not None:
-            portrait_url = portraits.get(str(best_hero)) or portraits.get(best_hero)
-
-    if portrait_url:
-        return _section(content, accessory=_thumbnail(portrait_url))
+    avatar_url = player.get("avatar")
+    if isinstance(avatar_url, str) and avatar_url.startswith("https://"):
+        return _section(content, accessory=_thumbnail(avatar_url))
     return _text(content)
 
 
-def _key_reads_content(payload, key, sample, roster_players, limit=5):
+def _key_reads_content(payload, key, sample, roster_players, limit=3):
     bullets = _key_read_stats(payload, key, sample, roster_players)[:limit]
     if not bullets:
         return None
@@ -808,12 +706,11 @@ def _footer_content(middle, generated_at, standin_names):
     return f"-# Team Scout · {middle} · data {generated} · standins: {standin_names}"
 
 
-def build_briefing_page(payload, team, vs=None, hero_emoji=None, portraits=None):
+def build_briefing_page(payload, team, vs=None, hero_emoji=None, medal_emoji=None):
     """Build the "Briefing" Components V2 page for `team`: {"components":
-    [...], "files": []}. `vs` defaults to the team's current-week matchup
-    opponent. `hero_emoji` maps hero_id (str or int) -> a Discord custom
-    emoji token; `portraits` maps hero_id -> a portrait image URL for player
-    thumbnails. Both are optional - without them the page just uses text."""
+    [...], "files": []}. `hero_emoji` maps hero_id (str or int) -> a Discord custom
+    emoji token; `medal_emoji` maps rank tiers to Discord emoji tokens.
+    Player thumbnails use Steam avatars from the payload when available."""
     heroes_map = payload.get("heroes") or {}
     players_by_id = {p.get("id"): p for p in payload.get("players") or []}
 
@@ -821,12 +718,9 @@ def build_briefing_page(payload, team, vs=None, hero_emoji=None, portraits=None)
     key = team_row.get("key")
 
     if vs:
-        vs_row = _find_team(payload, vs)
-    else:
-        vs_row = _find_matchup_opponent(payload, key)
+        _find_team(payload, vs)
 
     official_source = payload.get("officialSource") or {}
-    standing = _standing_for(payload, key)
 
     sample = _team_sample(payload, key)
     games = len(sample)
@@ -847,35 +741,34 @@ def build_briefing_page(payload, team, vs=None, hero_emoji=None, portraits=None)
 
     roster_players.sort(key=player_sort_key)
 
-    stats = _team_profile_stats(sample, games)
-    buckets = _length_buckets(sample)
-
     standin_names = ", ".join(
         row.get("name") for row in (team_row.get("replacements") or []) if row.get("name")
     ) or "none"
 
     components = [
         _text("\n".join((_header_lines(official_source, team_row),
-                          f"## {team_row.get('short') or team_row.get('name') or team}",
-                          _record_line(team_row, standing, vs_row)))),
-        _text(_form_line(sample)),
-        _separator(),
-        _text(_team_profile_content(stats, buckets)),
-        _separator(),
-        _text(_draft_content(sample, heroes_map, hero_emoji)),
-        _separator(),
-        _text("### \U0001F465 __Players__"),
+                          f"## {team_row.get('short') or team_row.get('name') or team} · "
+                          f"{team_row.get('record') or '-'}"))),
     ]
-    player_nodes = [_player_section(player, key, heroes_map, hero_emoji, portraits)
-                     for player in roster_players]
-    components.extend(player_nodes)
-
+    ranks = _team_rankings_content(payload, key)
+    if ranks:
+        components.extend([_separator(), _text(ranks)])
     key_reads_index = None
     key_reads_content = _key_reads_content(payload, key, sample, roster_players)
     if key_reads_content:
         components.append(_separator())
         components.append(_text(key_reads_content))
         key_reads_index = len(components) - 1
+
+    components.extend([
+        _separator(),
+        _text(_draft_content(sample, heroes_map, hero_emoji)),
+        _separator(),
+        _text("### __Players__"),
+    ])
+    player_nodes = [_player_section(player, key, heroes_map, hero_emoji, medal_emoji)
+                    for player in roster_players]
+    components.extend(player_nodes)
 
     footer_text = _footer_content(f"{games} official games", payload.get("generatedAt"), standin_names)
     components.append(_text(footer_text))
@@ -890,10 +783,7 @@ def build_briefing_page(payload, team, vs=None, hero_emoji=None, portraits=None)
 
 
 def _enforce_page_limits(components, player_nodes, key_reads_index=None, key_reads_getter=None):
-    """Trim, in order: Key reads bullets, then player hero lines, to stay
-    under the 4000-char text budget. Never exceeds LIMIT_COMPONENTS either
-    (this page's fixed layout never gets close, but a defensive trim keeps
-    the promise absolute)."""
+    """Keep the full official hero lists while fitting Discord's text budget."""
     def total_chars():
         return _text_chars(components)
 
@@ -902,7 +792,7 @@ def _enforce_page_limits(components, player_nodes, key_reads_index=None, key_rea
 
     # 1) Trim Key reads bullets one at a time.
     if key_reads_getter and key_reads_index is not None:
-        for limit in range(4, -1, -1):
+        for limit in range(2, -1, -1):
             new_content = key_reads_getter(limit)
             if new_content is None:
                 # No bullets left: drop the header/text node and its
@@ -919,31 +809,31 @@ def _enforce_page_limits(components, player_nodes, key_reads_index=None, key_rea
         if total_chars() <= LIMIT_TEXT_TOTAL:
             return
 
-    # 2) Trim player hero lines (drop the "**Heroes" line from each player
-    # section, largest sections first) until under budget.
+    # 2) Make room with lower-priority summary sections. Each hero needs its
+    # icon (or a short text fallback) to remain identifiable.
+    for title in ("__Draft__",):
+        for index, node in enumerate(components):
+            if title not in (node.get("content") or ""):
+                continue
+            del components[index]
+            if index and components[index - 1].get("type") == TYPE_SEPARATOR:
+                del components[index - 1]
+            break
+        if total_chars() <= LIMIT_TEXT_TOTAL:
+            return
+
+    # 3) On unusually large rosters, trim supporting player stats before
+    # touching official hero lists.
     ranked = sorted(player_nodes, key=lambda node: _text_chars([node]), reverse=True)
     for node in ranked:
         inner = node["components"][0] if node.get("type") == TYPE_SECTION else node
         lines = (inner.get("content") or "").split("\n")
-        lines = [ln for ln in lines if not ln.startswith("**Heroes")]
+        lines = [ln for ln in lines if not ln.startswith("**Stats**")]
         inner["content"] = "\n".join(lines)
         if total_chars() <= LIMIT_TEXT_TOTAL:
             return
 
-    # 3) Still over (an unusually large roster): drop the Vision and
-    # Teamfight lines too, largest sections first.
-    ranked = sorted(player_nodes, key=lambda node: _text_chars([node]), reverse=True)
-    for node in ranked:
-        inner = node["components"][0] if node.get("type") == TYPE_SECTION else node
-        lines = (inner.get("content") or "").split("\n")
-        lines = [ln for ln in lines if not ln.startswith(("**Vision**", "**Teamfight**"))]
-        inner["content"] = "\n".join(lines)
-        if total_chars() <= LIMIT_TEXT_TOTAL:
-            return
-
-    # 4) Last resort, guaranteed to terminate: hard-truncate the largest
-    # remaining TextDisplay contents until the total is back under budget.
-    # "Never exceed" wins over prettiness once every softer trim is spent.
+    # 4) Final safety for a pathological roster larger than one Discord page.
     def all_text_nodes(nodes):
         found = []
         for node in nodes:
@@ -956,8 +846,9 @@ def _enforce_page_limits(components, player_nodes, key_reads_index=None, key_rea
     guard = 0
     while total_chars() > LIMIT_TEXT_TOTAL and guard < 10000:
         guard += 1
-        text_nodes = sorted(all_text_nodes(components), key=lambda n: len(n.get("content") or ""),
-                             reverse=True)
+        text_nodes = sorted(all_text_nodes(components),
+                            key=lambda n: ("**Heroes**" in (n.get("content") or ""),
+                                           -len(n.get("content") or "")))
         if not text_nodes or not (text_nodes[0].get("content") or ""):
             break
         biggest = text_nodes[0]
@@ -968,183 +859,170 @@ def _enforce_page_limits(components, player_nodes, key_reads_index=None, key_rea
 # Wards page
 # --------------------------------------------------------------------------
 
-def _ward_side_games(payload, key, patch_id):
-    r_games = set()
-    d_games = set()
-    for entry in payload.get("teamMatches") or []:
-        if entry.get("patch") != patch_id:
-            continue
-        radiant_key = (entry.get("radiant") or {}).get("team_key")
-        dire_key = (entry.get("dire") or {}).get("team_key")
-        match_id = entry.get("match_id")
-        if radiant_key == key:
-            r_games.add(match_id)
-        elif dire_key == key:
-            d_games.add(match_id)
-    return len(r_games), len(d_games)
-
-
-def _mid_ward_summary_line(label, side_summary):
-    """One text line summarizing a side's mid-ward result, from the summary
-    dict ward_render.render_mid_ward() returns per side."""
-    games = side_summary.get("games") or 0
-    with_obs = side_summary.get("withObserver") or 0
-    top = side_summary.get("topSpotCount") or 0
-    spots = side_summary.get("spots") or 0
-    by_teammate = side_summary.get("byTeammate") or 0
-
-    if not with_obs:
-        verdict = "no early observer"
-    elif top / max(with_obs, 1) >= 0.5:
-        verdict = f"one main spot ({top} of {with_obs})"
-    else:
-        verdict = f"spread over {spots} spots"
-
-    line = f"**{label}** {with_obs} of {games} games · {verdict}"
-    if by_teammate:
-        line += f" · {by_teammate}* by a teammate"
-    return line
-
-
 def build_wards_page(payload, team, vs=None, hero_emoji=None, extra_images=None,
-                      mid_ward_summary=None):
-    """Build the "Wards" Components V2 page for `team`: {"components": [...],
-    "files": [(filename, bytes), ...]}.
+                     game_mode="individual"):
+    """Build a Wards page with Mid/4/5 lane maps and support full maps.
 
-    `extra_images` is an optional list of (filename, bytes, description)
-    tuples. Without `mid_ward_summary` they're simply appended to the main
-    sheet's media gallery (e.g. a zoomed detail) - the original, simple
-    shape. When `mid_ward_summary` is also given (the per-side {"games",
-    "withObserver", "byTeammate", "topSpotCount", "spots"} dict that
-    ward_render.render_mid_ward() returns), `extra_images[0]` is treated as
-    the mid ward image: it gets its own heading, summary text and media
-    gallery placed ahead of the existing supports sheet, so the page reads
-    top-down (mid ward, then supports); any further `extra_images[1:]` join
-    the supports gallery alongside wards.png, same as before."""
-    team_row = _find_team(payload, team)
+    The CLI supplies Mid/Top/Bottom images for those selected players.
+    Each image gets its own gallery so it can be opened at full resolution.
+    """
+    if game_mode not in ("heatmap", "individual"):
+        raise ValueError(f"Unknown game ward mode: {game_mode}")
+    team_row = dict(_find_team(payload, team))
+    lane_players = _select_map_players(payload, team_row, positions=(2, 4, 5),
+                                       excluded_names=("Mareth",))
+    supports = _select_map_players(payload, team_row, positions=(4, 5),
+                                   excluded_names=("Mareth",))
+    team_row["roster"] = [player.get("id") for _position, player in supports]
     key = team_row.get("key")
-    official_source = payload.get("officialSource") or {}
-
     patch_id = _ward_patch_id(payload)
-    r_games, d_games = _ward_side_games(payload, key, patch_id)
+    ward_players = [player for _position, player in lane_players]
+    has_ward_data = any(
+        any(wards[side][kind] for side in ("radiant", "dire") for kind in ("obs", "sen"))
+        for wards in (_player_side_wards(player, key, patch_id) for player in ward_players)
+    )
 
-    players_by_id = {p.get("id"): p for p in payload.get("players") or []}
-    roster_ids = team_row.get("roster") or []
-    roster_players = [players_by_id[pid] for pid in roster_ids if pid in players_by_id]
+    components = []
+    if not has_ward_data:
+        components.append(_text("Not enough ward data yet."))
 
-    def side_team_totals(side, side_games):
-        obs_total = sen_total = 0
-        for player in roster_players:
-            wards = _player_side_wards(player, key, patch_id)
-            obs_total += len(wards[side]["obs"])
-            sen_total += len(wards[side]["sen"])
-        obs_avg = obs_total / side_games if side_games else None
-        sen_avg = sen_total / side_games if side_games else None
-        return obs_avg, sen_avg
+    files = []
+    def add_gallery(images):
+        for filename, data, description in images:
+            item = {"media": {"url": f"attachment://{filename}"}}
+            if description:
+                item["description"] = description
+            components.append(_media_gallery([item]))
+            files.append((filename, data))
 
-    r_obs_avg, r_sen_avg = side_team_totals("radiant", r_games)
-    d_obs_avg, d_sen_avg = side_team_totals("dire", d_games)
-
-    who_wards_rows = []
-    for player in roster_players:
-        wards = _player_side_wards(player, key, patch_id)
-        r_obs = len(wards["radiant"]["obs"])
-        r_sen = len(wards["radiant"]["sen"])
-        d_obs = len(wards["dire"]["obs"])
-        d_sen = len(wards["dire"]["sen"])
-        total = r_obs + r_sen + d_obs + d_sen
-        r_games_p = wards["radiant"]["games"]
-        d_games_p = wards["dire"]["games"]
-        r_obs_avg_p = r_obs / r_games_p if r_games_p else 0
-        r_sen_avg_p = r_sen / r_games_p if r_games_p else 0
-        d_obs_avg_p = d_obs / d_games_p if d_games_p else 0
-        d_sen_avg_p = d_sen / d_games_p if d_games_p else 0
-        position = _player_position_mode(_player_team_rows(player, key))
-        who_wards_rows.append((total, player.get("name") or "?", position,
-                                r_obs_avg_p, r_sen_avg_p, d_obs_avg_p, d_sen_avg_p))
-    who_wards_rows.sort(key=lambda row: -row[0])
-
-    who_lines = ["### \U0001F9ED __Who wards__"]
-    for i, (total, name, position, r_o, r_s, d_o, d_s) in enumerate(who_wards_rows):
-        pos_part = f" (Pos {position})" if position else ""
-        if total == 0:
-            who_lines.append(f"**{name}**{pos_part} · none placed")
-        elif i == 0:
-            who_lines.append(f"**{name}**{pos_part} · **R** {r_o:.1f} obs / {r_s:.1f} sen "
-                              f"· **D** {d_o:.1f} / {d_s:.1f}")
-        else:
-            who_lines.append(f"**{name}**{pos_part} · **R** {r_o:.1f} / {r_s:.1f} "
-                              f"· **D** {d_o:.1f} / {d_s:.1f}")
-
-    sheet_bytes = _render_ward_sheet(payload, team_row, positions=(1, 4, 5))
-
-    def _gallery_item(entry):
-        filename, data, description = entry
-        item = {"media": {"url": f"attachment://{filename}"}}
-        if description:
-            item["description"] = description
-        return item, (filename, data)
-
-    supports_heading = _text("\n".join((
-        "### \U0001F5FA️ __Supports and carry__",
-        "-# Pos 1, 4 and 5 · gold = observer, teal = sentry, larger = more often")))
-
-    if mid_ward_summary:
-        extras = list(extra_images or [])
-        mid_entry, rest = (extras[0], extras[1:]) if extras else (None, [])
-
-        files = []
-        wards_block = []
-
-        mid_lines = ["### \U0001F3AF __Mid ward__"]
-        for side, label in (("radiant", "Radiant"), ("dire", "Dire")):
-            mid_lines.append(_mid_ward_summary_line(label, mid_ward_summary.get(side) or {}))
-        wards_block.append(_text("\n".join(mid_lines)))
-
-        if mid_entry:
-            item, file_entry = _gallery_item(mid_entry)
-            wards_block.append(_media_gallery([item]))
-            files.append(file_entry)
-
-        wards_block.append(_separator())
-        wards_block.append(supports_heading)
-
-        supports_items = [{"media": {"url": "attachment://wards.png"}}]
-        files.append(("wards.png", sheet_bytes))
-        for entry in rest:
-            item, file_entry = _gallery_item(entry)
-            supports_items.append(item)
-            files.append(file_entry)
-        wards_block.append(_media_gallery(supports_items))
-    else:
-        gallery_items = [{"media": {"url": "attachment://wards.png"}}]
-        files = [("wards.png", sheet_bytes)]
-        for entry in extra_images or []:
-            item, file_entry = _gallery_item(entry)
-            gallery_items.append(item)
-            files.append(file_entry)
-        wards_block = [supports_heading, _media_gallery(gallery_items)]
-
-    standin_names = ", ".join(
-        row.get("name") for row in (team_row.get("replacements") or []) if row.get("name")
-    ) or "none"
-
-    components = [
-        _text("\n".join((_header_lines(official_source, team_row),
-                          f"## \U0001F5FA️ {team_row.get('short') or team_row.get('name') or team} · Wards",
-                          f"**Patch** 7.41 · **Officials only** · "
-                          f"**Radiant** {r_games} games · **Dire** {d_games} games"))),
-        _separator(),
-        _text("\n".join(("### \U0001F441️ __Team per game__",
-                          f"**Radiant** {_fmt1(r_obs_avg)} obs · {_fmt1(r_sen_avg)} sen",
-                          f"**Dire** {_fmt1(d_obs_avg)} obs · {_fmt1(d_sen_avg)} sen"))),
-        _text("\n".join(who_lines)),
-        _separator(),
-    ] + wards_block + [
-        _text(_footer_content("7.41 officials", payload.get("generatedAt"), standin_names)),
-    ]
+    if extra_images:
+        components.append(_text("### Lane Wards"))
+        add_gallery(extra_images)
+    player_maps = _render_player_ward_rows(payload, team_row,
+                                           heatmap=game_mode == "heatmap")
+    if extra_images and player_maps:
+        components.append(_text("### Game Wards"))
+    if player_maps and game_mode == "heatmap":
+        components.append(_text("-# Gold: observers · Cyan: sentries · Brighter: more placements"))
+    add_gallery(player_maps)
 
     return {"components": [_container(components)], "files": files}
+
+
+# --------------------------------------------------------------------------
+# Recon page
+# --------------------------------------------------------------------------
+
+def _recon_monday(now):
+    """Monday midnight in the bot host's local timezone, like Team Scout."""
+    today = datetime.fromtimestamp(now)
+    monday = (today - timedelta(days=today.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    return monday.timestamp()
+
+
+def _recon_rows(player, floor):
+    return [m for m in player.get("matches") or []
+            if (m.get("at") or 0) >= floor
+            and m.get("lobby") in (0, 7) and m.get("mode") != 23]
+
+
+def build_recon_page(payload, team, vs=None, hero_emoji=None, now=None,
+                     medal_emoji=None):
+    """Show this week's public games for the team being scouted."""
+    team_row = _find_team(payload, team)
+    now = datetime.now().timestamp() if now is None else now
+    floor = _recon_monday(now)
+    since = datetime.fromtimestamp(floor).strftime("%a %b %d").replace(" 0", " ")
+    name = team_row.get("name") or team_row.get("short") or team
+    nodes = [_text(f"-# \U0001F50E SCOUT RECON · {name}\n## {name} · Recon\n-# Public games since {since} · ranked by volume")]
+
+    by_id = {p.get("id"): p for p in payload.get("players") or []}
+    replaced = set(team_row.get("replaced") or [])
+    players = [by_id[pid] for pid in (team_row.get("roster") or [])
+               if pid in by_id and pid not in replaced][:5]
+    if not players:
+        nodes.append(_text("No roster is available for recon."))
+        return {"components": [_container(nodes)], "files": []}
+
+    by_player = [(p, _recon_rows(p, floor)) for p in players]
+    all_rows = [m for _p, rows in by_player for m in rows]
+    hero_stats = {}
+    shared = {}
+    for player, rows in by_player:
+        for match in rows:
+            hero_id = match.get("hero")
+            if hero_id is not None:
+                stat = hero_stats.setdefault(hero_id, {"games": 0, "wins": 0, "players": set()})
+                stat["games"] += 1
+                stat["wins"] += bool(match.get("win"))
+                stat["players"].add(player.get("name") or "?")
+            match_id = match.get("id")
+            if match_id:
+                shared.setdefault(match_id, []).append((player, match))
+    ranking = sorted(hero_stats.items(), key=lambda item: (-item[1]["games"],
+                     -len(item[1]["players"]), -item[1]["wins"]))
+    wins = sum(bool(m.get("win")) for m in all_rows)
+    active = sum(bool(rows) for _p, rows in by_player)
+    private = [p.get("name") or "?" for p in players if p.get("private")]
+    top = ranking[0] if ranking else None
+    top_name = _hero_name(payload.get("heroes") or {}, top[0]) if top else "—"
+    metrics = [f"**This week** {wins}–{len(all_rows)-wins} · {len(all_rows)} player-games",
+               f"**Players active** {active}/{len(players)} · **Unique heroes** {len(ranking)}",
+               f"**Most played** {top_name}" + (f" · {top[1]['games']}g · {', '.join(sorted(top[1]['players']))}" if top else ""),
+               "**Private profiles** " + (", ".join(private) if private else "None")]
+    nodes += [_separator(), _text("\n".join(metrics))]
+
+    if ranking:
+        hero_lines = ["### Most played this week"]
+        for hero_id, stat in ranking[:12]:
+            hero = _hero_name(payload.get("heroes") or {}, hero_id)
+            token = _hero_prefix(hero_emoji, hero_id)
+            hero_lines.append(f"{token}**{hero}** · {stat['games']}g · {stat['wins']}–{stat['games']-stat['wins']} · {', '.join(sorted(stat['players']))}")
+        nodes += [_separator(), _text("\n".join(hero_lines))]
+    else:
+        nodes.append(_text("No cached public games since Monday."))
+
+    together = [(mid, rows) for mid, rows in shared.items()
+                if len({p.get("id") for p, _m in rows}) >= 2]
+    together.sort(key=lambda item: -max(m.get("at") or 0 for _p, m in item[1]))
+    if together:
+        lines = ["### Together this week", "-# Same public match, two or more of them."]
+        for mid, rows in together[:5]:
+            who = " · ".join(f"{p.get('name') or '?'} {_hero_name(payload.get('heroes') or {}, m.get('hero'))} {'W' if m.get('win') else 'L'}" for p, m in rows)
+            lines.append(f"[Match {mid}](https://www.opendota.com/matches/{mid}) · {who}")
+        nodes += [_separator(), _text("\n".join(lines))]
+
+    player_lines = ["### By player"]
+    for player, rows in by_player:
+        won = sum(bool(m.get("win")) for m in rows)
+        badge = medal_prefix(player.get("rankTier"), medal_emoji)
+        rank = player.get("rank") or "Unranked"
+        player_heading = f"{badge}**{player.get('name') or '?'}**"
+        if not badge:
+            player_heading += f" · {rank}"
+        player_lines.append(f"{player_heading} · {len(rows)} games · {won}–{len(rows)-won}" if rows
+                            else f"{player_heading} · quiet this week")
+        stats = {}
+        for m in rows:
+            hid = m.get("hero")
+            if hid is not None:
+                games, hero_wins = stats.get(hid, (0, 0))
+                stats[hid] = (games + 1, hero_wins + bool(m.get("win")))
+        for hid, (games, hero_wins) in sorted(stats.items(), key=lambda item: (-item[1][0], -item[1][1]))[:5]:
+            player_lines.append(f"  {_hero_prefix(hero_emoji, hid)}{_hero_name(payload.get('heroes') or {}, hid)} {games}g · {hero_wins}–{games-hero_wins}")
+    nodes += [_separator(), _text("\n".join(player_lines))]
+
+    # Trim detail rows first if a roster's names or weekly hero pool are large.
+    while _text_chars(nodes) > LIMIT_TEXT_TOTAL or any(
+            len(n.get("content") or "") > 2000 for n in nodes if n["type"] == TYPE_TEXT_DISPLAY):
+        candidates = [n for n in nodes if n["type"] == TYPE_TEXT_DISPLAY
+                      and "\n" in n["content"]]
+        if not candidates:
+            break
+        longest = max(candidates, key=lambda n: len(n["content"]))
+        longest["content"] = longest["content"].rsplit("\n", 1)[0]
+    return {"components": [_container(nodes)], "files": []}
 
 
 # --------------------------------------------------------------------------

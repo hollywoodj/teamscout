@@ -295,6 +295,62 @@ def test_hub_routes_before_and_after_loading(tmp_path, monkeypatch):
     hub.stop()
 
 
+def test_setup_music_lists_new_tracks_and_serves_safe_names(tmp_path, monkeypatch):
+    music = tmp_path / "Music"
+    music.mkdir()
+    monkeypatch.setattr("scout.herodraft.MUSIC_DIR", str(music))
+    hub = HeroDraftHub(53, offline=True)
+    assert json.loads(hub.route_get("/draft/music")[2]) == []
+    (music / "Autumn Winds.wav").write_bytes(b"RIFFtest")
+    (music / "notes.txt").write_text("not music")
+    assert json.loads(hub.route_get("/draft/music")[2]) == ["Autumn Winds.wav"]
+    assert hub.route_get("/draft/music/Autumn%20Winds.wav") == (
+        200, "audio/wav", b"RIFFtest")
+    assert hub.route_get("/draft/music/Autumn%20Winds.wav", head=True) == (
+        200, "audio/wav", b"")
+    (music / "Second.mp3").write_bytes(b"song")
+    assert json.loads(hub.route_get("/draft/music")[2]) == [
+        "Autumn Winds.wav", "Second.mp3"]
+    assert hub.route_get("/draft/music/..%2Fsecret.wav")[0] == 404
+    assert hub.route_get("/draft/music/notes.txt")[0] == 404
+
+
+def test_draft_rosters_are_saved_per_signin_and_team_name_is_canonical(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "HERODRAFT_TEAMS_FILE",
+                        str(tmp_path / "herodraft_teams.json"))
+    pool = [{"steam32": i, "name": f"P{i}", "mmr": 1, "role": "Any"}
+            for i in range(1, 11)]
+    profiles = {i: _prof(i, f"P{i}") for i in range(1, 11)}
+    league = {"teams": [{"key": "anony", "name": "Team Anony", "roster": [6, 7]}],
+              "books": {}}
+    args = (53, "S", pool, profiles, {})
+    ld2l = DraftState(*args, league=league, storage_key="ld2l")
+    assert ld2l.set_teams([1, 2], [6, 7], "Turtle Duck", enemy_key="anony")[0]
+    assert ld2l.enemy_name == "Team Anony"
+
+    rd2l = DraftState(*args, league=league, storage_key="rd2l")
+    assert rd2l.my_roster == [] and rd2l.enemy_roster == []
+    assert rd2l.set_teams([3, 4], [8, 9], "Turtle Duck")[0]
+
+    restored = DraftState(*args, league=league, storage_key="ld2l")
+    assert restored.my_roster == [1, 2]
+    assert restored.enemy_roster == [6, 7]
+    assert restored.enemy_name == "Team Anony"
+
+
+def test_legacy_saved_draft_is_only_restored_in_standalone_mode(tmp_path, monkeypatch):
+    path = tmp_path / "herodraft_teams.json"
+    path.write_text('{"mine":[1],"enemy":[2],"enemy_name":"Turtle Duck"}',
+                    encoding="utf-8")
+    monkeypatch.setattr(config, "HERODRAFT_TEAMS_FILE", str(path))
+    pool = [{"steam32": i, "name": f"P{i}", "mmr": 1, "role": "Any"}
+            for i in (1, 2)]
+    profiles = {i: _prof(i, f"P{i}") for i in (1, 2)}
+    args = (53, "S", pool, profiles, {})
+    assert DraftState(*args).enemy_name == "Turtle Duck"
+    assert DraftState(*args, storage_key="ld2l").my_roster == []
+
+
 import json  # noqa: E402
 
 

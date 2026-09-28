@@ -14,7 +14,7 @@ TEMPLATE = r'''<!doctype html>
 <meta name="theme-color" content="#151b23">
 <script>var THEME_COLORS={sports:"#151b23",military:"#191c16",lotus:"#060a14"};(function(){var t="sports";try{var s=localStorage.getItem("team-scout:theme");if(THEME_COLORS[s])t=s;var l=localStorage.getItem("team-scout:theme-league");if(t==="lotus"&&l&&l!=="ld2l")t="sports"}catch(e){}document.documentElement.dataset.theme=t;var m=document.querySelector('meta[name="theme-color"]');if(m)m.content=THEME_COLORS[t]})();</script>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700;800&family=Hanken+Grotesk:wght@400;600;700&family=Saira:wght@400;600;700&family=Saira+Stencil+One&family=Orbitron:wght@600;700;800&family=Exo+2:wght@400;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700;800&family=Hanken+Grotesk:wght@400;600;700&family=Barlow+Semi+Condensed:wght@400;600;700&family=Saira+Stencil+One&family=Orbitron:wght@600;700;800&family=Exo+2:wght@400;600;700&display=swap" rel="stylesheet">
 <title>Team Scout</title>
 <style>
 :root{--bg:#070b10;--panel:#0d141d;--panel2:#111b26;--line:#263341;--ink:#edf3f7;--muted:#93a3b3;--mine:#45c7cf;--mine2:#13373d;--enemy:#f06468;--enemy2:#3a1d25;--gold:#dfb65d;--good:#70d49b;--bad:#f07979;--radius:12px;--shadow:0 18px 45px #0008}
@@ -25,7 +25,7 @@ TEMPLATE = r'''<!doctype html>
 select.preset{padding:7px 9px;flex:1 1 260px;min-width:180px;max-width:100%;color:var(--muted);border-color:#3a4d5d}.loadTeam{padding:7px 11px;border-color:#56717e;background:#162631;color:#dceaf0;font-weight:650}.loadTeam:disabled{cursor:not-allowed;opacity:.42}
 .teamIdentity{display:flex;align-items:baseline;gap:10px;min-width:160px;margin-right:auto}.teamIdentity input{flex:0 1 240px;width:240px;max-width:100%;min-width:160px}.teamName{font-weight:650;font-size:24px;line-height:1.15}.teamRecord{font-weight:650;font-size:24px;line-height:1.15;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}.rosterLine{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.rosterLine>.chips{flex:1 1 220px;min-width:0}.rosterRight{display:flex;align-items:center;gap:12px;margin-left:auto;flex-wrap:wrap;justify-content:flex-end}.gearBtn{padding:6px 8px;line-height:0;flex:none}.gearBtn svg{display:block}
 .teamRoster{margin:0 0 12px}.subnav{display:flex;gap:5px;margin:16px 0 10px}.subnav button{border-color:transparent;background:transparent;padding:8px 12px;color:var(--muted)}.subnav button.on{color:var(--ink);background:var(--panel2);border-color:var(--line)}.chip[data-focus]{cursor:pointer}.chip.on{border-color:#536779;background:#14202b}
-.workspace{min-width:0}.singlePage{max-width:1180px;margin:0 auto}.singlePage>.teamsetup{margin:14px 0 8px;border:0;background:transparent;box-shadow:none;padding:0;border-radius:0}.singlePage>.teamsetup.mine,.singlePage>.teamsetup.enemy{border-top:0}.singlePage>.teamsetup .teamhead{margin-bottom:0}.pageHeading{display:flex;align-items:end;justify-content:space-between;gap:16px;margin:4px 2px 14px}.pageHeading .window{margin:0;flex:none}.pageHeading h2{font:650 24px/1.1 Georgia,serif;margin:0}.pageHeading p{margin:0;color:var(--muted);font-size:13px}.contentBlock{margin-top:16px}.contentBlock>h3{font-size:13px;text-transform:uppercase;letter-spacing:.11em;color:var(--muted);margin:0 0 9px 3px}.reconTop .metrics{grid-template-columns:repeat(4,minmax(0,1fr)) minmax(150px,1.25fr);margin-bottom:0}.metric.privateBlock.on{background:var(--enemy2)}.metric.privateBlock.on>span,.metric.privateBlock.on>b,.metric.privateBlock.on>small{color:var(--bad)}.metric.privateBlock.on>b{font-size:15px;line-height:1.25}.pageGrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}.breakdownPicker{display:flex;align-items:center;gap:10px;margin-bottom:12px}.breakdownPicker label{color:var(--muted);font-size:13px}.breakdownPicker select{min-width:280px;padding:9px 11px}
+.workspace{min-width:0}.singlePage{max-width:1180px;margin:0 auto}.singlePage>.teamsetup{margin:14px 0 8px;border:0;background:transparent;box-shadow:none;padding:0;border-radius:0}.singlePage>.teamsetup.mine,.singlePage>.teamsetup.enemy{border-top:0}.singlePage>.teamsetup .teamhead{margin-bottom:12px}.pageHeading{display:flex;align-items:end;justify-content:space-between;gap:16px;margin:4px 2px 14px}.pageHeading .window{margin:0;flex:none}.pageHeading h2{font:650 24px/1.1 Georgia,serif;margin:0}.pageHeading p{margin:0;color:var(--muted);font-size:13px}.contentBlock{margin-top:16px}.contentBlock>h3{font-size:13px;text-transform:uppercase;letter-spacing:.11em;color:var(--muted);margin:0 0 9px 3px}.reconTop .metrics{grid-template-columns:repeat(4,minmax(0,1fr)) minmax(150px,1.25fr);margin-bottom:0}.metric.privateBlock.on{background:var(--enemy2)}.metric.privateBlock.on>span,.metric.privateBlock.on>b,.metric.privateBlock.on>small{color:var(--bad)}.metric.privateBlock.on>b{font-size:15px;line-height:1.25}.pageGrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}.breakdownPicker{display:flex;align-items:center;gap:10px;margin-bottom:12px}.breakdownPicker label{color:var(--muted);font-size:13px}.breakdownPicker select{min-width:280px;padding:9px 11px}
 .detailMetrics{grid-template-columns:repeat(auto-fit,minmax(145px,1fr))}.analysisGrid{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(260px,.75fr);gap:14px}.compareTable{width:100%;border-collapse:collapse;font-size:13px}.compareTable th,.compareTable td{padding:8px 9px;border-bottom:1px solid #1e2b37;text-align:right;font-variant-numeric:tabular-nums}.compareTable th:first-child,.compareTable td:first-child{text-align:left}.compareTable th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em}.deltaUp{color:var(--good)}.deltaDown{color:var(--bad)}.inference{display:grid;gap:8px}.insight{padding:10px 11px;border-left:2px solid var(--gold);background:#0a1118;color:#cbd5dc;font-size:13px;line-height:1.4}.caveat{color:var(--muted);font-size:12px;line-height:1.45;margin:9px 0 0}.positionBars{display:grid;gap:8px}.positionRow{display:grid;grid-template-columns:95px 1fr 78px;gap:9px;align-items:center;font-size:13px}.positionRow .track{height:8px}.posBadge{display:inline-flex;align-items:center;justify-content:center;min-width:30px;padding:3px 6px;border:1px solid #415466;border-radius:999px;color:#c8d7e1;font-size:11px;font-weight:700}.heroRow.best{grid-template-columns:minmax(135px,1.35fr) 64px 62px 72px minmax(130px,1.4fr)}.sub,.heroRow .sub{display:block;color:var(--muted);font-size:11px;font-weight:400;margin-top:3px}.conf{color:var(--muted);font-size:11px}.analysisTitle{display:flex;align-items:baseline;justify-content:space-between;gap:10px}.analysisTitle small{color:var(--muted);font-size:11px;text-transform:none;letter-spacing:0}.roleLine{display:flex;gap:7px;flex-wrap:wrap;align-items:center}.emptyAnalysis{color:var(--muted);font-size:13px;padding:5px 0}.keysList{display:grid;gap:10px;margin-top:8px}.keyItem{padding:13px 15px;border-left:3px solid var(--gold);background:#0a1118}.keyItem>b{display:block;font:650 17px/1.3 Georgia,serif;margin:0 0 6px}.keyItem p{margin:0;color:#b7c5d0;font-size:13px;line-height:1.45}
 @media(max-width:980px){.pageGrid,.analysisGrid{grid-template-columns:1fr}.heroRow.best{grid-template-columns:minmax(125px,1.2fr) 55px 55px minmax(120px,1fr)}.heroRow.best>:nth-child(4){display:none}.reconTop .metrics{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:540px){.heroRow.best{grid-template-columns:minmax(115px,1fr) 48px 54px}.heroRow.best>:nth-child(4),.heroRow.best>:nth-child(5){display:none}.positionRow{grid-template-columns:88px 1fr 70px;font-size:12px}.analysisTitle{align-items:flex-start;flex-direction:column;gap:3px}}
@@ -33,6 +33,7 @@ select.preset{padding:7px 9px;flex:1 1 260px;min-width:180px;max-width:100%;colo
 .rowMine{background:var(--mine2)}.rowMine td:first-child,.rowMine b{color:var(--mine)}.rowEnemy{background:var(--enemy2)}.rowEnemy td:first-child,.rowEnemy b{color:var(--enemy)}.rankGold{color:var(--gold);margin-right:4px}.standingsTbl{min-width:0}.standingsWho b{display:block}.standingsWho .sub{margin-top:2px}.standingsActions{display:flex;gap:6px;justify-content:flex-end;white-space:nowrap}.standingsActions button{padding:5px 8px;font-size:12px}.matchupSlate{display:grid;gap:8px;margin:0 0 16px}.slateRow{display:flex;align-items:center;justify-content:center;gap:12px;width:100%;padding:12px 14px;text-align:center;background:#0d151e}.slateRow:hover{border-color:#536779;background:#14202b}.slateVs{color:var(--muted);font:700 11px Georgia;letter-spacing:.12em}.slateRow .onSide{color:var(--gold)}
 .pullbox{position:relative;margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}.pullInput{flex:1;min-width:220px;padding:8px 10px}.pullbox button{padding:8px 12px}.pullDropdown{position:absolute;top:100%;left:0;right:0;margin-top:4px;background:#101923;border:1px solid var(--line);border-radius:9px;box-shadow:var(--shadow);z-index:30;max-height:280px;overflow:auto}
 .pullResult{display:flex;align-items:center;gap:9px;width:100%;padding:8px 10px;border:0;border-radius:0;background:transparent;text-align:left}.pullResult:hover{background:#182531}.pullAvatar{width:26px;height:26px;border-radius:50%;object-fit:cover;background:#1b2733;flex:none}.pullResultInfo small{color:var(--muted);display:block;font-size:11px}
+.steamAvatar{position:relative;display:inline-grid;place-items:center;flex:none;width:var(--avatar-size,28px);height:var(--avatar-size,28px);overflow:hidden;border:1px solid #405364;border-radius:5px;background:#1b2733;color:var(--muted);font-size:calc(var(--avatar-size,28px) * .36);font-weight:700;line-height:1;vertical-align:middle}.steamAvatar img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}.playerBadges{display:inline-flex;align-items:center;gap:4px;flex:none}.rankMedal{position:relative;display:inline-block;flex:none;width:var(--medal-width,var(--medal-size,28px));height:var(--medal-size,28px)}.rankMedal img{position:absolute;top:calc(50% + var(--medal-shift,0px) - 2px);left:0;width:100%;height:auto;transform:translateY(-50%)}.rankMedal.unknown{display:inline-grid;place-items:center;border:1px dashed var(--line);border-radius:3px;color:var(--muted);font-size:11px}.detailHead{flex-wrap:wrap}.playerIdentity{display:flex;align-items:center;gap:12px;min-width:0}.playerIdentity>div{min-width:0}.chip .steamAvatar{border-radius:50%}.impactName{display:inline-flex;align-items:center;gap:8px;min-width:0}.impactName>span:last-child{min-width:0;overflow-wrap:anywhere}
 .pullMsg{padding:9px 10px;color:var(--muted);font-size:13px}.pullErr{color:var(--bad)}.pullStatus{width:100%;font-size:12px;color:var(--muted)}.pullStatus.bad{color:var(--bad)}.hint{color:var(--muted);font-size:12px;margin-top:4px}
 .standinCol{display:flex;flex-direction:column;align-items:flex-end;gap:6px;min-width:0}.replacementsRow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin:0;padding:0;border:0}.replacementsRow>b{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.08em;white-space:nowrap}.replacementsRow .chips{flex:0 1 auto;min-height:0}.repActions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.repActions button{padding:6px 9px;font-size:12px}
 .subChip,.subChipTag{border-color:#5c4d2f;cursor:pointer}.sub{color:var(--gold);text-transform:uppercase;font-size:9px;margin-left:3px}.chip.swapReady{cursor:pointer;border-color:var(--gold)}.chip.pending{border-color:var(--gold);color:var(--gold)}.chip.goneChip{text-decoration:line-through;opacity:.75;cursor:default;border-color:#3a4a58}.markGone{border:0;background:transparent;color:var(--muted);font-size:10px;padding:0 3px;text-transform:uppercase;letter-spacing:.04em}.markGone:hover{color:var(--ink)}td.goneHeroName,td.goneHeroName .matchupWho,.flexHero.gone b,.flexHero.gone small{text-decoration:line-through;color:var(--muted)}
@@ -41,7 +42,7 @@ select.preset{padding:7px 9px;flex:1 1 260px;min-width:180px;max-width:100%;colo
 .seriesList{display:grid;gap:14px}.seriesCard{padding:14px}.seriesCard .tableWrap{margin-top:10px}.seriesHead{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:10px}.seriesDate{color:var(--ink);font:650 22px/1.15 Georgia,serif}.seriesOpp small{color:var(--muted)}.seriesScore{font:700 16px/1 Georgia,serif;font-variant-numeric:tabular-nums}.seriesScore.good{color:var(--good)}.seriesScore.bad{color:var(--bad)}
 .gameList{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:start}.gameList .gameRow:only-child{grid-column:1/-1}.gameRow{border:1px solid var(--line);border-radius:9px;padding:10px 11px;background:#0d151e;min-width:0}.gameMeta{display:flex;gap:10px;align-items:center;font-size:12px;color:var(--muted);margin-bottom:8px;flex-wrap:wrap}.gameMeta a{color:#a8d9e2}
 .resultsFilter{display:flex;flex-wrap:wrap;gap:7px;align-items:center;margin:0 3px 12px}.resultsFilter>b{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.08em;margin-right:2px}.resultsFilter .chip{cursor:pointer}.resultsFilter .chip.on{border-color:var(--mine);background:#16323a;color:var(--ink);font-weight:650;box-shadow:0 0 0 1px var(--mine)}.resultsFilter.enemy .chip.on{border-color:var(--enemy);background:#3a1d25;box-shadow:0 0 0 1px var(--enemy)}.heroCell.on{background:#16323a;box-shadow:0 0 0 2px var(--mine);border-radius:6px}.seriesList.enemy .heroCell.on{box-shadow:0 0 0 2px var(--enemy);background:#3a1d25}.seriesList.filtering .sideBlock.mine .heroCell:not(.on){opacity:.32}.seriesList.filtering .sideBlock.enemy{opacity:.45}.gameRow.sitout{opacity:.42}
-.gameSides{display:flex;gap:10px;align-items:flex-start;justify-content:center}.sideBlock{display:flex;gap:0;justify-content:flex-start;min-width:0;padding:8px 6px 7px}.gameSides .sideBlock:first-child{justify-content:flex-end}.sideBlock.mine{border:1.5px solid rgba(255,255,255,.35);border-radius:28px}.vsTiny{color:var(--muted);font-size:11px;padding-top:40px;flex:none}.heroCell{display:flex;flex-direction:column;align-items:center;gap:3px;flex:none;width:48px;font-size:11px;text-align:center}.heroPickN{font-size:9px;line-height:1;color:var(--muted);font-variant-numeric:tabular-nums;min-height:9px}.heroCell .heroIcon,.heroCell .heroFallback{display:block;border-radius:0}.heroCellName{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;font-size:9px;font-weight:600;width:48px;line-height:1.2;max-height:2.4em;overflow-wrap:normal;word-break:normal}
+.gameSides{display:flex;gap:10px;align-items:flex-start;justify-content:center}.sideBlock{display:flex;gap:0;justify-content:flex-start;min-width:0;padding:8px 6px 7px}.gameSides .sideBlock:first-child{justify-content:flex-end}.sideBlock.mine{border:1.5px solid rgba(255,255,255,.35);border-radius:28px}.vsTiny{color:var(--muted);font-size:11px;padding-top:40px;flex:none}.heroCell{display:flex;flex-direction:column;align-items:center;gap:3px;flex:none;width:48px;font-size:11px;text-align:center}.heroPickN{font-size:9px;line-height:1;color:var(--muted);font-variant-numeric:tabular-nums;min-height:9px}.heroCell .heroIcon,.heroCell .heroFallback{display:block;border-radius:0}.heroCellName{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;font-size:9px;font-weight:600;width:48px;line-height:1.2;overflow-wrap:normal;word-break:normal}
 .draftLine{display:flex;align-items:flex-end;gap:0;flex-wrap:wrap;margin-top:9px;padding-top:8px;border-top:1px solid #182531;font-size:11px;color:var(--muted)}.gameList .draftLine{flex-wrap:nowrap;min-width:0}.gameList .draftLabel{flex:none}.gameList .draftAct{flex:1 1 0;min-width:0;max-width:28px}.gameList .draftAct .heroIcon,.gameList .draftAct .heroFallback{width:100%!important;height:auto!important;aspect-ratio:1}.draftLabel{color:var(--muted);margin-right:8px;padding-bottom:4px}.draftSep{color:#3a4a58;margin:0 4px}.draftAct{display:inline-flex;flex-direction:column;align-items:center;gap:2px;line-height:0}.draftAct:before{content:"";width:100%;height:2px;background:transparent;margin-top:1px;flex:none;order:1}.draftAct.ours:before{background:var(--mine)}.draftAct.theirs:before{background:var(--enemy)}.draftAct:after{content:"";width:5px;height:5px;border-radius:50%;background:transparent;margin-top:3px;flex:none;order:2;box-sizing:border-box}.draftAct.ours:after{background:#fff}.draftAct.ours.ban:after{background:transparent;border:1px solid #fff}.draftAct .heroIcon,.draftAct .heroFallback{display:block;border-radius:0}.draftN{font-size:9px;line-height:1;color:var(--muted);font-variant-numeric:tabular-nums}
 .wardGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(500px,1fr));gap:12px}.wardCard{background:#0d151e;border:1px solid var(--line);border-radius:10px;padding:8px 8px 10px;text-align:center}.wardCard b{display:block;font-size:13px}.wardCard small{display:block;color:var(--muted);font-size:11px;margin:3px 0 7px}.wardMap{position:relative;overflow:hidden;border-radius:6px;background:#081018;margin:0 auto}.wardMap img{display:block;width:100%;height:100%;object-fit:cover;filter:saturate(.8) brightness(.92)}.wardDot{position:absolute;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none}.wardDot.obs{width:11px;height:11px;background:var(--gold);box-shadow:0 0 8px #dfb65dcc;border:1px solid #1a1408}.wardDot.sen{width:8px;height:8px;background:var(--mine);box-shadow:0 0 7px #45c7cf99;border:1px solid #041416}.wardEmpty{position:absolute;inset:0;display:grid;place-items:center;color:var(--muted);font-size:11px;background:#0005}.wardLegend{display:flex;gap:12px;justify-content:flex-end;align-items:center;color:var(--muted);font-size:11px;margin:0 3px 8px}.wardFreqHint{margin-right:auto}.wardLegend .wardToggle{margin-right:auto}.wardToggle{display:inline-flex;border:1px solid var(--line);border-radius:999px;overflow:hidden;flex:none}.wardToggle button{border:0;border-radius:0;background:transparent;color:var(--muted);padding:2px 8px;font-size:11px;line-height:1.5}.wardToggle button.on{background:#16323a;color:var(--ink)}.wardHeatPair{display:flex;gap:6px;justify-content:center;position:relative}.wardKind{color:var(--muted);font-size:10px;text-align:center;margin-bottom:3px}.wardHeat{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}.heatScale{display:inline-flex;align-items:center;gap:5px}.heatScale i{width:48px;height:8px;border-radius:99px;margin:0;background:linear-gradient(90deg,#00f,#0f0 45%,#ff0 72%,#f00)}.wardLegend i{display:inline-block;position:static;transform:none;margin-right:5px;vertical-align:middle}.wardSplit,.gameWards{display:flex;flex-direction:column;align-items:center;gap:14px;margin-top:10px}.wardSplit{margin-top:0}.wardSlot{min-width:0}.wardSlot.off{opacity:.32}.wardSlot.off:has(.wardHeatPair){display:none}.wardSplit .wardSideLabel,.gameWards .wardSideLabel{color:var(--muted);font-size:11px;margin-bottom:4px;text-align:center}.playerProfile .subnav{margin-top:4px}.steamLink{display:inline-flex;align-items:center;color:#a8d9e2;vertical-align:-3px}.steamLink:hover{color:var(--ink)}.steamIcon{display:block}.playerWardAll{margin:0 0 16px}.playerWardAll .wardCard{max-width:none;text-align:center}.playerGameWard a{display:inline-block;margin-top:6px;color:#a8d9e2;font-size:11px;text-decoration:none}.wardFold{margin-top:9px;padding-top:8px;border-top:1px solid #182531}.wardFold>summary{cursor:pointer;display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:11px;color:var(--muted);list-style:none}.wardFold>summary::-webkit-details-marker,.wardFold>summary::marker{display:none;content:""}.wardFold>summary::before{content:"";width:0;height:0;border-left:5px solid currentColor;border-top:4px solid transparent;border-bottom:4px solid transparent;flex:none;opacity:.75}.wardFold[open]>summary::before{transform:rotate(90deg)}.wardFold[open]>summary{margin-bottom:4px}.wardFold>summary:focus-visible{outline:2px solid var(--mine);outline-offset:2px}.wardFold .gameWards{margin-top:8px}.seriesWards{margin-top:4px}.seriesWards .resultHeads,.seriesWards .resultKindMaps{display:grid;grid-template-columns:76px minmax(0,1fr) minmax(0,1fr);gap:8px 14px;align-items:start}.seriesWards .resultHeads{color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px}.seriesWards .resultHeads span:nth-child(2){text-align:left}.seriesWards .resultHeads span:nth-child(3){text-align:right}.seriesWards .resultKind+.resultKind{margin-top:12px}.seriesWards .resultKindLabel{color:var(--muted);font-size:11px;padding-top:6px}.seriesWards .resultSide{display:flex;flex-wrap:wrap;gap:8px;min-width:0}.seriesWards .resultSide.radiant{justify-content:flex-start}.seriesWards .resultSide.dire{justify-content:flex-end;text-align:right}.seriesWards .resultMap{margin:0}.seriesWards .resultMap figcaption{color:var(--muted);font-size:11px;margin:0 0 4px}.tbl tr.wardRow td{text-align:left;padding:2px 10px 12px}.tbl tr.wardRow .wardFold{margin-top:0;padding-top:4px;border-top:0}.playerWardAll .wardFold,.playerGameWard .wardFold{margin-top:8px;padding-top:8px;text-align:left}
 @media(max-width:980px){.gameList{grid-template-columns:1fr}}
@@ -73,7 +74,7 @@ select.preset{padding:7px 9px;flex:1 1 260px;min-width:180px;max-width:100%;colo
   --gold:#c9a74e;--good:#b5cf7a;--bad:#e0a04f;
   --river:#c9a74e;
   --display:"Saira Stencil One","Bahnschrift","Arial Narrow",sans-serif;--displayW:400;
-  --text:"Saira","Segoe UI",sans-serif;
+  --text:"Barlow Semi Condensed","Segoe UI",sans-serif;
   --radius:0px;
 }
 /* Lotus: fleet command over a starfield. Allied blue, enemy red, crawl-yellow accents. */
@@ -93,7 +94,7 @@ button,select,input{background:var(--panel);border-color:var(--line);border-radi
 :focus-visible{outline:2px solid var(--river);outline-offset:2px}
 
 /* Header */
-.top{background:var(--topbg);border-bottom:1px solid var(--line);min-height:64px;gap:22px}
+.top{background:var(--topbg);border-bottom:1px solid var(--line);min-height:64px;gap:22px;padding-inline:20px}
 .brand h1{font:var(--displayW) 26px/1 var(--display);letter-spacing:.01em;text-transform:none}
 .leagueSwitch{border-radius:4px}
 .leagueSwitch button{font:700 14px/1 var(--text);letter-spacing:.02em;padding:8px 12px}
@@ -122,7 +123,7 @@ button,select,input{background:var(--panel);border-color:var(--line);border-radi
   background:linear-gradient(104deg,transparent 0 calc(50% - 7px),color-mix(in srgb,var(--river) 14%,transparent) calc(50% - 7px) calc(50% + 7px),transparent calc(50% + 7px))}
 .sbSide{display:flex;align-items:baseline;gap:18px;padding:22px 28px;min-width:0}
 .sbSide.enemy{flex-direction:row-reverse;text-align:right}
-.sbName{font:var(--displayW) 44px/1 var(--display);letter-spacing:.005em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.sbName{font:var(--displayW) 44px/1.2 var(--display);letter-spacing:.005em;overflow-wrap:anywhere;min-width:0}
 .sbSide.mine .sbName{color:var(--mine)}.sbSide.enemy .sbName{color:var(--enemy)}
 .sbRec{font:var(--displayW) 44px/1 var(--display);color:var(--ink);white-space:nowrap}
 .sbMeta{display:block;font:400 13px/1.3 var(--text);color:var(--muted);margin-top:6px}
@@ -261,7 +262,7 @@ button,select,input{background:var(--panel);border-color:var(--line);border-radi
 
 /* Phone header: brand and settings on top, your/opponent tabs together, then league tabs */
 @media(max-width:980px){
-  .top{display:grid;grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"brand brand settings" "mine enemy enemy" "side side side";align-items:center;gap:0 10px;padding-top:10px}
+  .top{display:grid;grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"brand brand settings" "mine enemy enemy" "side side side";align-items:center;gap:0 10px;padding:10px 12px 0}
   .brand{grid-area:brand;min-width:0}
   .settings{grid-area:settings}
   .navMine{grid-area:mine}
@@ -299,11 +300,13 @@ button,select,input{background:var(--panel);border-color:var(--line);border-radi
 .sbContext{grid-column:1/-1;position:relative;z-index:1;display:flex;justify-content:center;gap:16px;padding:9px 16px;background:var(--panel);border-top:1px solid var(--line);font-size:13px;color:var(--muted)}
 .sbContext b{color:var(--ink);font-weight:600}
 .mockDraftBtn{color:var(--gold)!important}
+@media(min-width:981px){.navEnemy .mockDraftBtn{margin-left:24px}}
 .mockDraftBar{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:0 0 16px;padding:12px 16px;border:1px solid var(--line);border-radius:var(--radius);background:var(--panel)}
 .mockDraftBar b{display:block;font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--gold);margin-bottom:3px}
 .mockDraftBar span{font-size:13px;color:var(--muted)}
 .mockDraftBar button{white-space:nowrap;color:var(--gold);border-color:#5c4d2f}
 @media(max-width:980px){.mockDraftBar{flex-direction:column;align-items:stretch}}
+.rankGroups{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:16px}.rankGroup h4{margin:0 0 8px;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em}.rankTiles{display:grid;gap:6px}.rankTile{display:flex;justify-content:space-between;gap:12px;align-items:baseline;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#0d151e;font-size:13px}.rankTile b{color:var(--gold);font:650 17px Georgia,serif;font-variant-numeric:tabular-nums;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -403,6 +406,10 @@ if(ACCOUNT.locked&&ACCOUNT.teamKey){const lockedTeam=(DATA.teams||[]).find(t=>t.
 else ensureDefaultMine();
 autoOpponent();
 const E=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const RANK_ICONS=__RANK_ICONS__;
+function rankMedal(p,size=28){const tier=Number(p.rankTier),style=`style="--medal-size:${size}px"`;if(!Number.isInteger(tier)||tier<10||tier>80)return `<span class="rankMedal unknown" ${style} title="Medal unavailable" aria-label="Medal unavailable">—</span>`;const names=["","Herald","Guardian","Crusader","Archon","Legend","Ancient","Divine","Immortal"],group=Math.floor(tier/10),star=tier%10;if(!names[group]||(group<8&&star>5))return `<span class="rankMedal unknown" ${style} title="Medal unavailable" aria-label="Medal unavailable">—</span>`;const scale=(star?[0,1.3,1.3,1.3,1.12,1.07,1.03,1.15,1]:[0,1.55,1.57,1.54,1.3,1.22,1.17,1.27,1])[group],artWidth=Math.round(size*scale),starTop=[0,3,8,3,8,3][star]||0,shift=star?Math.max(0,Math.round((artWidth-size)/2-artWidth*starTop/256)):0,label=names[group]+(group<8&&star?` ${star}`:""),root="https://www.opendota.com/assets/images/dota2/rank_icons/",icon=RANK_ICONS[`rank_icon_${group}`]||`${root}rank_icon_${group}.png`,pip=RANK_ICONS[`rank_star_${star}`]||`${root}rank_star_${star}.png`;return `<span class="rankMedal" style="--medal-size:${size}px;--medal-width:${artWidth}px;--medal-shift:${shift}px" title="${E(label)}" role="img" aria-label="${E(label)} medal"><img src="${E(icon)}" alt="">${group<8&&star?`<img src="${E(pip)}" alt="">`:""}</span>`}
+function steamAvatar(p,size=28){const initials=String(p.name||"?").trim().split(/\s+/).map(s=>s[0]||"").join("").slice(0,2).toUpperCase()||"?",url=String(p.avatar||"");const img=/^https:\/\//i.test(url)?`<img src="${E(url)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">`:"";return `<span class="steamAvatar" style="--avatar-size:${size}px" role="img" aria-label="${E(p.name)} Steam avatar">${E(initials)}${img}</span>`}
+function playerBadges(p,size=28){return `<span class="playerBadges">${rankMedal(p,size)}${steamAvatar(p,size)}</span>`}
 function cellName(s){let t=String(s??"").replace(/_/g," ").replace(/[^\p{L}\p{N} ]+/gu,"").replace(/\s+/g," ").trim();if(!t)return t;if(t===t.toUpperCase())return t;return t.replace(/([\p{Ll}\p{N}])(\p{Lu})/gu,"$1 $2")}
 function teamKey(name){let s=String(name||"").trim().toLowerCase();s=s.replace(/^the\s+/,"");return s.replace(/[^a-z0-9]+/g,"")}
 function heroInitials(name){return String(name||"?").trim().split(/\s+/).map(w=>w[0]||"").join("").slice(0,3).toUpperCase()||"?"}
@@ -571,17 +578,17 @@ function setupHead(side){
   const picker=editing&&!(side==="mine"&&ACCOUNT.locked)&&DATA.teams?.length?`<select class="preset" data-team-choice="${side}" aria-label="Choose ${side==='mine'?'my':'opponent'} team"><option value="">Choose team</option>${teamChoiceOptions(presetKey)}</select><button class="loadTeam" data-load-team="${side}" ${state[presetKey]===''?'disabled':''}>Add team</button>`:'';
   return `<div class="teamhead"><div class="teamIdentity">${nameField}${record}</div>${picker}${gear}</div>`;
 }
-function setupRoster(side){
+function setupRoster(side,selectable=true){
   const ps=members(side),full=ps.length>=5,editing=!!(state.editing&&state.editing[side]);
   const teamObj=(DATA.teams||[]).find(t=>t.key===sideLoadedKey(side));
   const postedSet=new Set(teamObj?teamObj.postedRoster||[]:[]);
   const pending=state.pendingStandin&&state.pendingStandin.side===side?state.pendingStandin.id:null;
   const focusId=state[side==='mine'?'focusMine':'focusEnemy'];
-  const chips=`<div class="rosterLine"><div class="chips">${ps.length?ps.map(p=>{const sub=teamObj&&!postedSet.has(p.id),selected=!pending&&focusId===p.id,cls=`chip${sub?' subChipTag':''}${pending?' swapReady':''}${selected?' on':''}`,action=pending?` data-swap-for="${side}:${p.id}" title="Swap out ${E(p.name)}"`:` data-focus="${side}:${p.id}"`,goneMark=editing&&teamObj?`<button class="markGone" data-mark-replaced="${side}:${p.id}" title="Mark as replaced (left the team)">replaced</button>`:'',x=editing?`<button data-remove="${side}:${p.id}" aria-label="Remove ${E(p.name)}">×</button>`:'';return `<span class="${cls}"${action}>${E(p.name)}${sub?' <small class="sub">sub</small>':''}${goneMark}${x}</span>`}).join(""):`<span class="emptychip">Add a team or pull a player</span>`}</div><div class="rosterRight">${replacementsRow(side,teamObj)}</div></div>`;
+  const chips=`<div class="rosterLine"><div class="chips">${ps.length?ps.map(p=>{const sub=teamObj&&!postedSet.has(p.id),selected=selectable&&!pending&&focusId===p.id,cls=`chip${sub?' subChipTag':''}${pending?' swapReady':''}${selected?' on':''}`,action=pending?` data-swap-for="${side}:${p.id}" title="Swap out ${E(p.name)}"`:selectable?` data-focus="${side}:${p.id}"`:'',goneMark=editing&&teamObj?`<button class="markGone" data-mark-replaced="${side}:${p.id}" title="Mark as replaced (left the team)">replaced</button>`:'',x=editing?`<button data-remove="${side}:${p.id}" aria-label="Remove ${E(p.name)}">×</button>`:'';return `<span class="${cls}"${action}>${playerBadges(p,22)}${E(p.name)}${sub?' <small class="sub">sub</small>':''}${goneMark}${x}</span>`}).join(""):`<span class="emptychip">Add a team or pull a player</span>`}</div><div class="rosterRight">${replacementsRow(side,teamObj)}</div></div>`;
   const pull=editing?`<div class="pullbox" data-pull="${side}"><input type="text" class="pullInput" data-pull-input="${side}" placeholder="Name, Steam ID, or Dotabuff/OpenDota link" autocomplete="off" ${full?'disabled':''}><button data-pull-btn="${side}" ${full?'disabled':''}>Pull player</button><div class="pullDropdown hidden" data-pull-dropdown="${side}"></div><div class="pullStatus" data-pull-status="${side}"></div>${full?'<div class="hint">Roster is full — remove a player to pull a standin.</div>':''}</div>`:'';
   return chips+pull;
 }
-function setup(side,showRoster=true){return setupHead(side)+(showRoster?setupRoster(side):"")}
+function setup(side,showRoster=true,selectable=true){return setupHead(side)+(showRoster?setupRoster(side,selectable):"")}
 function replacementsRow(side,teamObj){
   if(!teamObj)return "";
   const editing=!!(state.editing&&state.editing[side]);
@@ -636,7 +643,7 @@ function dbMatchUrl(id){return `https://www.dotabuff.com/matches/${id}`}
 function opponentLink(name,key,matchId){const label=captainLabel(name,key);return matchId?`<a target="_blank" rel="noopener" href="${dbMatchUrl(matchId)}" title="${E(name||label)}">${E(label)}</a>`:E(label)}
 function officialTeamHeroStats(ps){const map=new Map();for(const p of ps){for(const m of p.official.matches||[]){const id=m.hero_id;if(!id)continue;const x=map.get(id)||{id,name:heroName(id),games:0,wins:0,players:[],positions:{}};x.games++;if(m.result==="W")x.wins++;if(!x.players.includes(p.name))x.players.push(p.name);if(m.position)x.positions[m.position]=(x.positions[m.position]||0)+1;map.set(id,x)}}return [...map.values()].map(h=>({...h,primaryPosition:Object.entries(h.positions||{}).sort((a,b)=>b[1]-a[1])[0]?.[0]||null})).sort((a,b)=>b.games-a.games||b.players.length-a.players.length||b.wins-a.wins)}
 function impactPlayers(ps,limit=3){const rows=ps.map(p=>{const off=officialRows(p),s=matchSummary(off);return {p,s,pos:positionSummary(off).primary}}).filter(x=>x.s.games);const qualified=rows.filter(x=>x.s.games>=5);return (qualified.length?qualified:rows).sort((a,b)=>(b.s.kda||0)-(a.s.kda||0)||b.s.games-a.s.games||(b.s.gpm||0)-(a.s.gpm||0)).slice(0,limit)}
-function impactPanel(ps){const top=impactPlayers(ps);return `<div class="section"><h3>Highest impact</h3><p class="matchupCap">Ranked by KDA in LD2L officials.</p><div class="tableWrap"><table class="tbl matchupTbl"><thead><tr><th>Player</th><th>KDA</th><th>GPM</th><th>XPM</th><th>WR</th><th>G</th></tr></thead><tbody>${top.map(({p,s,pos})=>{const role=pos?`P${pos.position} ${POS[pos.position]}`:"—";return `<tr><td>${E(p.name)}<span class="matchupWho">${E(role)}</span></td><td>${s.kda==null?'—':s.kda.toFixed(2)}</td><td>${s.gpm==null?'—':Math.round(s.gpm)}</td><td>${s.xpm==null?'—':Math.round(s.xpm)}</td><td>${pct(s.wins,s.games)}</td><td>${s.games}</td></tr>`}).join("")||"<tr><td colspan='6'>No official player data.</td></tr>"}</tbody></table></div></div>`}
+function impactPanel(ps){const top=impactPlayers(ps);return `<div class="section"><h3>Highest impact</h3><p class="matchupCap">Ranked by KDA in LD2L officials.</p><div class="tableWrap"><table class="tbl matchupTbl"><thead><tr><th>Player</th><th>KDA</th><th>GPM</th><th>XPM</th><th>WR</th><th>G</th></tr></thead><tbody>${top.map(({p,s,pos})=>{const role=pos?`P${pos.position} ${POS[pos.position]}`:"—";return `<tr><td><span class="impactName">${playerBadges(p,32)}<span>${E(p.name)}<span class="matchupWho">${E(role)}</span></span></span></td><td>${s.kda==null?'—':s.kda.toFixed(2)}</td><td>${s.gpm==null?'—':Math.round(s.gpm)}</td><td>${s.xpm==null?'—':Math.round(s.xpm)}</td><td>${pct(s.wins,s.games)}</td><td>${s.games}</td></tr>`}).join("")||"<tr><td colspan='6'>No official player data.</td></tr>"}</tbody></table></div></div>`}
 function overview(side){const ps=members(side);if(!ps.length)return empty(side);const posted=sourceTeam(ps),officialGames=ps.reduce((s,p)=>s+p.official.games,0),officialWins=ps.reduce((s,p)=>s+p.official.wins,0),heroes=officialTeamHeroStats(ps),max=Math.max(...heroes.slice(0,6).map(h=>h.games),1),rec=posted?.record||(officialGames?`${officialWins}–${officialGames-officialWins}`:null),extra=rec?`${rec} official`:"";return sideHeader(side,extra)+`<div class="card">${impactPanel(ps)}<div class="section"><h3>Most exposed heroes</h3><div class="bars">${heroes.slice(0,6).map(h=>`<div class="barrow"><span>${heroIcon(h.id,18)} ${E(h.name)}</span><div class="track"><div class="fill" style="width:${h.games/max*100}%"></div></div><span class="value">${h.games}g · ${pct(h.wins,h.games)}</span></div>`).join("")||"<span class='sample'>No official hero data.</span>"}</div></div></div>`}
 function playerRow(p,side){const r=record(p),m=matchSummary(windowMatches(p)),pos=positionSummary(windowMatches(p)).primary;return `<button class="player ${state[side==='mine'?'focusMine':'focusEnemy']===p.id?'on':''}" data-focus="${side}:${p.id}"><span class="who"><b>${E(p.name)}</b><small>${E(p.rank)}${pos?` · P${pos.position} ${E(POS[pos.position])} inferred`:''}</small></span><span class="stat"><b>${p.mmr||'—'}</b><small>MMR</small></span><span class="stat"><b>${pct(r.wins,r.games)}</b><small>${r.games} games</small></span><span class="stat"><b class="official">${p.official.winrate==null?'—':p.official.winrate+'%'}</b><small>${p.official.games} official</small></span><span class="stat"><b>${m.kda==null?'—':m.kda.toFixed(2)}</b><small>KDA</small></span></button>`}
 function steam64(id){return (BigInt(id)+76561197960265728n).toString()}
@@ -645,18 +652,18 @@ function steamIcon(){return `<svg class="steamIcon" viewBox="0 0 24 24" width="1
 function steamLink(id){return `<a class="steamLink" target="_blank" rel="noopener" href="${steamUrl(id)}" title="Steam" aria-label="Steam">${steamIcon()}</a>`}
 function esportsPillText(esports){if(!esports||esports.status==="unavailable")return "Esports: not fetched";if(!esports.games)return "Esports: no ticketed games";return `Esports ${esports.wins}-${esports.games-esports.wins} · ${esports.winrate==null?'—':esports.winrate+'%'}`}
 function esportsPillTitle(esports){const unresolved=(esports&&esports.unresolved)||0;return `Ticketed league matches found via OpenDota (the same basis as Dotabuff's esports profile). ${unresolved} lobby game${unresolved===1?'':'s'} not yet classified.`}
-function playerHead(p){const links=p.links||{};return `<div class="card"><div class="section detailHead"><div><h3>${E(p.name)}</h3><p>${E(p.rank)} · ${p.mmr?p.mmr+' MMR':'MMR unavailable'}${p.private?' · Private profile':''} · ${steamLink(p.id)}${links.dotabuff?` · <a target="_blank" rel="noopener" href="${links.dotabuff}">Dotabuff</a>`:''}${links.dotabuffEsports?` · <a target="_blank" rel="noopener" href="${links.dotabuffEsports}">Esports profile</a>`:''}</p></div><span class="pillRow"><span class="pill">Officials ${p.official.wins}–${p.official.games-p.official.wins} · ${p.official.winrate==null?'—':p.official.winrate+'%'}</span><span class="pill" title="${E(esportsPillTitle(p.esports))}">${E(esportsPillText(p.esports))}</span></span></div></div>`}
+function playerHead(p){const links=p.links||{};return `<div class="card"><div class="section detailHead"><div class="playerIdentity">${playerBadges(p,56)}<div><h3>${E(p.name)}</h3><p>${E(p.rank)} · ${p.mmr?p.mmr+' MMR':'MMR unavailable'}${p.private?' · Private profile':''}${links.dotabuff?` · <a target="_blank" rel="noopener" href="${links.dotabuff}">Dotabuff</a>`:''}${links.dotabuffEsports?` · <a target="_blank" rel="noopener" href="${links.dotabuffEsports}">Esports profile</a>`:''}</p></div></div><span class="pillRow"><span class="pill">Officials ${p.official.wins}–${p.official.games-p.official.wins} · ${p.official.winrate==null?'—':p.official.winrate+'%'}</span><span class="pill" title="${E(esportsPillTitle(p.esports))}">${E(esportsPillText(p.esports))}</span></span></div></div>`}
 function playerOverview(p){
   const officials=officialRows(p);
-  if(!officials.length)return `<div class="notice">No cached LD2L official matches for this player.</div>`;
-  return `<div class="detail"><div class="contentBlock">${winLossPanel(officials,"Officials")}</div><div class="contentBlock">${positionPanel(officials,"Official positions")}</div></div>`;
+  const officialBody=officials.length?`<div class="contentBlock">${winLossPanel(officials,"Officials")}</div><div class="contentBlock">${positionPanel(officials,"Official positions")}</div>`:`<div class="notice">No cached LD2L official matches for this player.</div>`;
+  return `<div class="detail">${officialBody}</div>`;
 }
 function playerOfficialsTab(p){
   return `<div class="detail"><div class="contentBlock">${officialSeriesList(p)}</div></div>`;
 }
 function playerPubsTab(p){
   const rows=windowMatches(p).filter(isPub),wins=rows.filter(x=>x.win).length,m=matchSummary(rows),pos=positionSummary(rows).primary,ci=wilson(wins,rows.length);
-  return `<div class="detail"><div class="pageHeading">${windowSelect()}</div><div class="card"><div class="metrics detailMetrics">${metric("Window",`${wins}–${rows.length-wins}`,pct(wins,rows.length))}${metric("95% WR range",ci?`${Math.round(ci[0])}–${Math.round(ci[1])}%`:"—")}${metric("Observed role",pos?`P${pos.position} ${POS[pos.position]}`:"Unclear",pos?`${pos.games}/${positionSummary(rows).total} classified games`:"no classified games")}${metric("KDA",m.kda==null?'—':m.kda.toFixed(2))}${metric("GPM / XPM",`${fmt(m.gpm==null?null:Math.round(m.gpm))} / ${fmt(m.xpm==null?null:Math.round(m.xpm))}`)}${metric("Exact lanes",`${p.deep.laneW}–${p.deep.laneD}–${p.deep.laneL}`,`${p.deep.lanes} parsed`)}</div></div><div class="contentBlock">${winLossPanel(rows)}</div><div class="contentBlock"><div class="analysisGrid">${positionPanel(rows)}${bestHeroPanel([p])}</div></div><div class="contentBlock">${matchTable(p)}</div></div>`;
+  return `<div class="detail"><div class="pageHeading">${windowSelect()}</div><div class="card"><div class="metrics detailMetrics">${metric("Window",`${wins}–${rows.length-wins}`,pct(wins,rows.length))}${metric("95% WR range",ci?`${Math.round(ci[0])}–${Math.round(ci[1])}%`:"—")}${metric("Observed role",pos?`P${pos.position} ${POS[pos.position]}`:"Unclear",pos?`${pos.games}/${positionSummary(rows).total} classified games`:"no classified games")}${metric("KDA",m.kda==null?'—':m.kda.toFixed(2))}${metric("GPM / XPM",`${fmt(m.gpm==null?null:Math.round(m.gpm))} / ${fmt(m.xpm==null?null:Math.round(m.xpm))}`)}${metric("Exact lanes",`${p.deep.laneW}–${p.deep.laneD}–${p.deep.laneL}`,`${p.deep.lanes} parsed`)}${heroAttackMetrics(p.heroPool)}</div></div><div class="contentBlock">${winLossPanel(rows)}</div><div class="contentBlock"><div class="analysisGrid">${positionPanel(rows)}${bestHeroPanel([p])}</div></div><div class="contentBlock">${matchTable(p)}</div></div>`;
 }
 let heroSort={key:"score",dir:-1};
 function heroSortValue(h,key){
@@ -671,18 +678,23 @@ function heroGemsCard(pool){
   if(!gems.length)return `<div class="card section"><h3>Hidden gems</h3><p class="sample">No hidden gems: nothing outside their comfort picks clears the bar yet.</p></div>`;
   return `<div class="card section"><h3>Hidden gems</h3><div class="gemList">${gems.map(h=>`<div class="gemRow"><b>${heroIcon(h.id,26)} ${E(heroName(h.id))}<span class="sub">${h.position?`P${h.position} ${E(POS[h.position]||'')}`:''}</span></b><span class="gemScore" title="Shrunk win rate">${Math.round(h.score*100)}%</span><span class="gemReason">${E(h.reason)}</span></div>`).join("")}</div></div>`;
 }
+function heroAttackMetrics(pool){
+  const split=pool?.attackSplit||{},melee=split.melee||{},ranged=split.ranged||{};
+  const attackMetric=(type,period,record)=>metric(`${type} · ${period}`,record?.games?`${record.winrate}%`:'—',record?.games?`${record.wins}–${record.games-record.wins}`:'No games');
+  return attackMetric('Melee','Pubs 6mo',melee.recent)+attackMetric('Ranged','Pubs 6mo',ranged.recent)+attackMetric('Melee','Lifetime',melee.lifetime)+attackMetric('Ranged','Lifetime',ranged.lifetime);
+}
 function heroTableHead(){
   const th=(key,label)=>`<th data-hero-sort="${key}" class="${heroSort.key===key?'on':''}">${label}${heroSort.key===key?' ▾':''}</th>`;
-  return `<tr>${th("score","Hero")}<th>Pos</th>${th("pubsWr","Pubs 6mo")}${th("games","Lifetime")}<th>Officials</th>${th("esportsGames","Esports")}<th>Meta WR</th><th>Tags</th></tr>`;
+  return `<tr>${th("score","Hero")}<th>Type</th><th>Pos</th>${th("pubsWr","Pubs 6mo")}${th("games","Lifetime")}<th>Officials</th>${th("esportsGames","Esports")}<th>Meta WR</th><th>Tags</th></tr>`;
 }
 function heroPoolRow(h){
   const pubsWr=h.recent.games?pct(h.recent.wins,h.recent.games):"—",lifeWr=h.lifetime.games?pct(h.lifetime.wins,h.lifetime.games):"—";
   const delta=h.recent.kdaDelta,deltaCls=delta==null?"":delta>=0?"good":"bad";
-  return `<tr><td class="heroCol">${heroIcon(h.id,20)} ${E(heroName(h.id))}</td><td>${h.position?'P'+h.position:'—'}</td><td>${h.recent.games?`${h.recent.wins}–${h.recent.games-h.recent.wins}`:'—'} <span class="sub">${pubsWr}</span> <span class="${deltaCls}">${delta==null?'':signed(delta,1)}</span></td><td>${h.lifetime.games?`${h.lifetime.wins}–${h.lifetime.games-h.lifetime.wins}`:'—'} <span class="sub">${lifeWr} · ${date(h.lifetime.last)}</span></td><td>${h.official.games?`${h.official.wins}–${h.official.games-h.official.wins}`:'—'}</td><td>${h.esports.games?`${h.esports.wins}–${h.esports.games-h.esports.wins}`:'—'}</td><td>${h.metaWr==null?'—':h.metaWr+'%'}</td><td class="matchupNote">${heroTagChips(h.tags)}</td></tr>`;
+  return `<tr><td class="heroCol">${heroIcon(h.id,20)} ${E(heroName(h.id))}</td><td>${h.attackType||'—'}</td><td>${h.position?'P'+h.position:'—'}</td><td>${h.recent.games?`${h.recent.wins}–${h.recent.games-h.recent.wins}`:'—'} <span class="sub">${pubsWr}</span> <span class="${deltaCls}">${delta==null?'':signed(delta,1)}</span></td><td>${h.lifetime.games?`${h.lifetime.wins}–${h.lifetime.games-h.lifetime.wins}`:'—'} <span class="sub">${lifeWr} · ${date(h.lifetime.last)}</span></td><td>${h.official.games?`${h.official.wins}–${h.official.games-h.official.wins}`:'—'}</td><td>${h.esports.games?`${h.esports.wins}–${h.esports.games-h.esports.wins}`:'—'}</td><td>${h.metaWr==null?'—':h.metaWr+'%'}</td><td class="matchupNote">${heroTagChips(h.tags)}</td></tr>`;
 }
 function heroPoolTable(pool){
   const heroes=[...(pool.heroes||[])].sort((a,b)=>heroSortValue(b,heroSort.key)-heroSortValue(a,heroSort.key));
-  return `<div class="tableWrap"><table class="tbl"><thead>${heroTableHead()}</thead><tbody>${heroes.map(heroPoolRow).join("")||'<tr><td colspan="8">No hero data yet.</td></tr>'}</tbody></table></div>`;
+  return `<div class="tableWrap"><table class="tbl"><thead>${heroTableHead()}</thead><tbody>${heroes.map(heroPoolRow).join("")||'<tr><td colspan="9">No hero data yet.</td></tr>'}</tbody></table></div>`;
 }
 function playerHeroesTab(p){
   const pool=p.heroPool||{heroes:[],gems:[],baseline:{},pubWindowDays:180};
@@ -719,32 +731,41 @@ function patchesView(side){const ps=members(side);if(!ps.length)return empty(sid
 function heroPanel(ps){const all=officialTeamHeroStats(ps),qualified=all.filter(h=>h.games>=3),hs=(qualified.length?qualified:all).sort((a,b)=>heroScore(b)-heroScore(a)||b.games-a.games||a.name.localeCompare(b.name)).slice(0,12);return `<div class="card section"><div class="analysisTitle"><h3>Best heroes</h3></div><div class="heroTable">${hs.map((h,i)=>`<div class="heroRow best"><b>${i+1}. ${heroIcon(h.id,22)} ${E(h.name)}<span class="sub">${E(h.players.join(', '))}</span></b><span>${h.wins}–${h.games-h.wins}</span><span class="${h.games>=5&&h.wins/h.games>=.55?'good':h.games>=5&&h.wins/h.games<.45?'bad':''}">${pct(h.wins,h.games)}</span><span><span class="posBadge">${h.primaryPosition?'P'+h.primaryPosition:'—'}</span></span></div>`).join("")||"<span class='sample'>No official hero data.</span>"}</div></div>`}
 function deepPanel(ps){const rows=ps.map(p=>{const matches=windowMatches(p);return {p,s:matchSummary(matches),pos:positionSummary(matches).primary}});return `<div class="tableWrap"><table class="tbl"><thead><tr><th>Player</th><th>Role</th><th>Games</th><th>KDA</th><th>GPM</th><th>XPM</th><th>HD/min</th><th>TD/min</th><th>Lane</th><th>Obs/30</th><th>Sen/30</th><th>Dewards/30</th></tr></thead><tbody>${rows.map(({p,s,pos})=>`<tr><td>${E(p.name)}</td><td>${pos?`P${pos.position} ${E(POS[pos.position])}`:'—'}</td><td>${s.games}</td><td>${s.kda==null?'—':s.kda.toFixed(2)}</td><td>${fmt(s.gpm==null?null:Math.round(s.gpm))}</td><td>${fmt(s.xpm==null?null:Math.round(s.xpm))}</td><td>${fmt(s.hdpm)}</td><td>${fmt(s.tdpm)}</td><td>${s.lane==null?'—':s.lane.toFixed(1)+'%'}</td><td>${s.obs30==null?'—':s.obs30.toFixed(1)}</td><td>${s.sen30==null?'—':s.sen30.toFixed(1)}</td><td>${p.deep.dewards30??'—'}</td></tr>`).join("")}</tbody></table></div>`}
 function patchPanel(ps){const relevant=[...DATA.patches].reverse().filter(pa=>ps.some(p=>p.matches.some(m=>m.patch===pa.id))).slice(0,12);return `<div class="card section patchRows">${relevant.map(pa=>{const rows=ps.flatMap(p=>p.matches.filter(m=>m.patch===pa.id)),s=matchSummary(rows);return `<div class="patchRow"><b>${E(pa.name)}</b><span>${s.games}<small>games</small></span><span class="${s.wr>=55?'good':s.wr<45?'bad':''}">${s.wr==null?'—':Math.round(s.wr)+'%'}<small>win rate</small></span><span>${s.kda==null?'—':s.kda.toFixed(2)}<small>KDA</small></span></div>`}).join("")||"<span class='sample'>No patch-tagged matches in the cached sample.</span>"}</div>`}
+function teamRankingsPanel(side){
+  const key=sideLoadedKey(side),row=key&&(DATA.teamRankings||{})[key];
+  if(!row)return "";
+  const groups={"Results":[["win_rate","Win rate"]],"Fighting":[["kills","Kills"],["deaths","Deaths"],["teamfight","Teamfight"],["first_blood","First blood"]],"Vision":[["observers","Observers"],["sentries","Sentries"],["dewards","Dewards"],["obs_lost","Obs lost"]],"Economy":[["gpm","GPM"],["xpm","XPM"],["lane_eff","Lane efficiency"],["stacks","Stacks"]],"Objectives":[["towers","Towers"],["roshan","Roshan"],["buybacks","Buybacks"]]};
+  const cards=Object.entries(groups).map(([group,items])=>`<div class="rankGroup"><h4>${group}</h4><div class="rankTiles">${items.map(([id,label])=>{const rank=row.metrics[id],place=rank&&rank.rank!=null?`#${rank.rank}/${rank.total}`:"—";return `<div class="rankTile"><span>${label}</span><b>${place}</b></div>`}).join("")}</div></div>`).join("");
+  return `<div class="contentBlock"><h3>League ranks</h3><div class="card section"><p class="matchupCap">${row.games} cached official games · #1 means most, including deaths and buybacks. Only teams with data for a metric count.</p><div class="rankGroups">${cards}</div></div></div>`;
+}
 function teamPage(side){
   const label=side==='mine'?'Your Team':'Opponent',pane=state.sub&&(state.sub[side]==="draft"||state.sub[side]==="results"||state.sub[side]==="roles")?state.sub[side]:"players";
   const body=pane==="roles"?teamRoles(side):pane==="draft"?teamDraft(side):pane==="results"?teamResults(side):teamPlayers(side);
   const roster=pane==="players"?`<div class="teamRoster">${setupRoster(side)}</div>`:"";
-  return `<div class="singlePage"><div class="teamsetup ${side}" id="setup-${side}">${setupHead(side)}</div><nav class="subnav" aria-label="${label} sections"><button data-team-sub="${side}:players" class="${pane==='players'?'on':''}">Players</button><button data-team-sub="${side}:roles" class="${pane==='roles'?'on':''}">Roles</button><button data-team-sub="${side}:draft" class="${pane==='draft'?'on':''}">Draft</button><button data-team-sub="${side}:results" class="${pane==='results'?'on':''}">Results</button></nav>${roster}${body}</div>`;
+  return `<div class="singlePage"><div class="teamsetup ${side}" id="setup-${side}">${setupHead(side)}</div><nav class="subnav" aria-label="${label} sections"><button data-team-sub="${side}:players" class="${pane==='players'?'on':''}">Players</button><button data-team-sub="${side}:roles" class="${pane==='roles'?'on':''}">Roles</button><button data-team-sub="${side}:draft" class="${pane==='draft'?'on':''}">Drafts</button><button data-team-sub="${side}:results" class="${pane==='results'?'on':''}">Results</button></nav>${teamRankingsPanel(side)}${roster}${body}</div>`;
 }
 function focusedPlayer(side){const id=state[side==="mine"?"focusMine":"focusEnemy"],p=byId.get(id);return p&&state[side].includes(p.id)?p:null}
 function playerPanel(p,side){const pane=playerPane(state.playerSub&&state.playerSub[side]),body=pane==="standins"?standinsTab(side):pane==="wards"?playerWardsTab(p):pane==="heroes"?playerHeroesTab(p):pane==="esports"?playerEsportsTab(p):pane==="pubs"?playerPubsTab(p):pane==="officials"?playerOfficialsTab(p):playerOverview(p);return `<div class="contentBlock playerProfile">${playerHead(p)}<nav class="subnav" aria-label="${E(p.name)} profile"><button data-player-sub="${side}:overview" class="${pane==='overview'?'on':''}">Overview</button><button data-player-sub="${side}:officials" class="${pane==='officials'?'on':''}">Officials</button><button data-player-sub="${side}:esports" class="${pane==='esports'?'on':''}">Esports</button><button data-player-sub="${side}:pubs" class="${pane==='pubs'?'on':''}">Pubs</button><button data-player-sub="${side}:heroes" class="${pane==='heroes'?'on':''}">Heroes</button><button data-player-sub="${side}:wards" class="${pane==='wards'?'on':''}">Ward maps</button><button data-player-sub="${side}:standins" class="${pane==='standins'?'on':''}">Standins</button></nav>${body}</div>`}
 function teamDraftPanel(games){if(!games.length)return "";const bansBy=banSummary(games,true),bansAgainst=banSummary(games,false);return `<div class="contentBlock"><h3>Bans</h3><div class="pageGrid resultsSummary"><div class="card section"><h3>Most banned</h3><div class="heroChipRow">${bansBy.map(h=>heroBanChip(h)).join("")||'<span class="sample">No bans recorded.</span>'}</div></div><div class="card section"><h3>Most banned against them</h3><div class="heroChipRow">${bansAgainst.map(h=>heroBanChip(h)).join("")||'<span class="sample">No bans recorded.</span>'}</div></div></div></div>`}
 function teamPlayers(side){const ps=members(side);if(!ps.length)return `<div class="notice">Add a team or pull a player to see the roster breakdown.</div>`;let p=focusedPlayer(side);if(!p){p=ps[0];state[side==="mine"?"focusMine":"focusEnemy"]=p.id}return playerPanel(p,side)}
 function teamDraft(side){const key=sideLoadedKey(side),games=key?teamGames(key):[];if(!key)return `<div class="notice">Add a team to see draft analysis.</div>`;if(!games.length)return `<div class="notice">No cached official matches for this team yet.</div>`;return teamSplitPanel(games)+heroMatchupPanel(games,replacedIdsFor(side))+teamDraftPanel(games)}
-function officialPosAt(id,matchId){
+function officialRoleAt(id,matchId){
   const p=byId.get(id);
-  const m=p&&p.official&&p.official.matches&&p.official.matches.find(x=>x.match_id===matchId);
-  return m&&m.position?m.position:null;
+  const m=p&&p.official&&p.official.matches&&p.official.matches.find(x=>String(x.match_id)===String(matchId));
+  return {position:m&&m.position,confidence:m&&m.position_confidence,evidence:(m&&m.position_evidence)||[]};
 }
 function playerOfficialLineups(ps){
   const byMatch=new Map();
   for(const p of ps){
     for(const m of (p.official&&p.official.matches)||[]){
-      const e=byMatch.get(m.match_id)||{match_id:m.match_id,win:m.result==="W",players:[]};
+      const e=byMatch.get(m.match_id)||{match_id:m.match_id,win:m.result==="W",players:[],sides:new Set()};
+      const side=typeof m.is_radiant==="boolean"?`side:${m.is_radiant}`:m.team_key?`team:${m.team_key}`:"unknown";
+      e.sides.add(side);
       e.players.push({id:p.id,name:p.name,hero_id:m.hero_id});
       byMatch.set(m.match_id,e);
     }
   }
-  return [...byMatch.values()].filter(g=>g.players.length>=2);
+  return [...byMatch.values()].filter(g=>g.players.length>=2).map(g=>({...g,lineupKnown:g.sides.size===1&&!g.sides.has("unknown")}));
 }
 function officialRoleGames(side){
   const key=sideLoadedKey(side);
@@ -766,7 +787,7 @@ function replacedIdsFor(side){
 }
 function currentIdsFor(side){
   const t=teamByKey(sideLoadedKey(side));
-  if(!t)return new Set();
+  if(!t)return new Set(members(side).map(p=>p.id));
   const replaced=replacedIdsFor(side);
   const base=(t.roster&&t.roster.length)?t.roster:(t.postedRoster||[]);
   return new Set(base.filter(id=>!replaced.has(id)));
@@ -775,166 +796,7 @@ function activeRoster(t,otherIds){
   const replaced=new Set((t&&t.replaced)||[]),other=new Set(otherIds||[]);
   return ((t&&t.roster)||[]).filter(id=>!replaced.has(id)&&!other.has(id)).slice(0,5);
 }
-function bumpRole(map,pos,win){
-  const r=map.get(pos)||{position:pos,games:0,wins:0};
-  r.games++;if(win)r.wins++;map.set(pos,r);
-}
-function roleList(map){return [...map.values()].sort((a,b)=>b.games-a.games||a.position-b.position)}
-function roleShare(roles,classified){return classified&&roles[0]?roles[0].games/classified:0}
-function isCorePos(n){return n===1||n===2||n===3}
-function isSupportPos(n){return n===4||n===5}
-function teamRoleBreakdown(games,postedIds,replacedIds){
-  const counts=new Map();
-  for(const g of games)for(const p of g.players||[])if(p.id!=null)counts.set(p.id,(counts.get(p.id)||0)+1);
-  const replaced=new Set(replacedIds||[]);
-  const posted=postedIds&&postedIds.size?new Set([...postedIds].filter(id=>!replaced.has(id))):new Set([...counts.entries()].filter(x=>!replaced.has(x[0])).sort((a,b)=>b[1]-a[1]).slice(0,5).map(x=>x[0]));
-  function hasReplaced(g){return (g.players||[]).some(p=>p.id!=null&&replaced.has(p.id))}
-  function hasStandin(g){return (g.players||[]).some(p=>p.id!=null&&!posted.has(p.id)&&!replaced.has(p.id))}
-  const currentGames=replaced.size?games.filter(g=>!hasReplaced(g)):games;
-  const roleGames=currentGames.length?currentGames:games;
-  const eraFallback=!!(replaced.size&&!currentGames.length);
-  const byPlayer=new Map();
-  function bump(p,pos,win,standin){
-    const key=p.id!=null?p.id:p.name;
-    if(key==null||key==="")return;
-    const e=byPlayer.get(key)||{id:p.id,name:p.name,games:0,classified:0,full:0,standin:0,roles:new Map(),rolesFull:new Map(),rolesStandin:new Map()};
-    e.games++;
-    if(p.name)e.name=p.name;
-    if(standin)e.standin++;else e.full++;
-    if(pos){
-      e.classified++;
-      bumpRole(e.roles,pos,win);
-      if(standin)bumpRole(e.rolesStandin,pos,win);else bumpRole(e.rolesFull,pos,win);
-    }
-    byPlayer.set(key,e);
-  }
-  const lineups=[],heroes=new Map();
-  let standinGames=0;
-  for(const g of roleGames){
-    const standin=hasStandin(g);
-    if(standin)standinGames++;
-    const slots=[];
-    for(const p of g.players||[]){
-      const pos=p.id!=null?officialPosAt(p.id,g.match_id):null;
-      if(p.id!=null&&replaced.has(p.id)){
-        slots.push({id:p.id,name:p.name,position:pos,hero_id:p.hero_id,standin:false});
-        continue;
-      }
-      bump(p,pos,g.win,standin);
-      slots.push({id:p.id,name:p.name,position:pos,hero_id:p.hero_id,standin});
-    }
-    lineups.push({slots,standin});
-  }
-  for(const g of games){
-    for(const p of g.players||[]){
-      if(p.hero_id){
-        const h=heroes.get(p.hero_id)||{id:p.hero_id,games:0,wins:0,players:new Map()};
-        h.games++;if(g.win)h.wins++;
-        const pk=p.id!=null?p.id:p.name,pe=h.players.get(pk)||{id:p.id,name:p.name,games:0};
-        pe.games++;if(p.name)pe.name=p.name;h.players.set(pk,pe);
-        heroes.set(p.hero_id,h);
-      }
-      if(p.id!=null&&replaced.has(p.id))bump(p,officialPosAt(p.id,g.match_id),g.win,false);
-    }
-  }
-  const players=[...byPlayer.values()].map(e=>{
-    const roles=roleList(e.roles),rolesFull=roleList(e.rolesFull),rolesStandin=roleList(e.rolesStandin);
-    const primary=(rolesFull[0]&&e.full>=2?rolesFull[0]:roles[0])||null;
-    const classifiedFull=rolesFull.reduce((s,r)=>s+r.games,0),classifiedStandin=rolesStandin.reduce((s,r)=>s+r.games,0);
-    const offFull=primary?rolesFull.filter(r=>r.position!==primary.position):[],offStandin=primary?rolesStandin.filter(r=>r.position!==primary.position):[];
-    const share=roleShare(primary&&rolesFull[0]&&e.full>=2?rolesFull:roles,primary&&rolesFull[0]&&e.full>=2?classifiedFull:e.classified);
-    const flexFull=classifiedFull>=2&&offFull.length>0&&(offFull.reduce((s,r)=>s+r.games,0)>=2||classifiedFull>=3&&share<.8);
-    const flexStandin=offStandin.length>0&&offStandin.reduce((s,r)=>s+r.games,0)>=1;
-    const supportFlex=primary&&isSupportPos(primary.position)&&roles.some(r=>isSupportPos(r.position)&&r.position!==primary.position&&r.games>=2);
-    const core=primary?isCorePos(primary.position):false;
-    return {...e,roles,rolesFull,rolesStandin,primary,share,offFull,offStandin,flexFull,flexStandin,supportFlex,core,posted:e.id!=null&&posted.has(e.id),replaced:e.id!=null&&replaced.has(e.id)};
-  }).sort((a,b)=>{
-    const pa=a.primary?a.primary.position:99,pb=b.primary?b.primary.position:99;
-    return pa-pb||b.classified-a.classified||b.games-a.games||String(a.name||"").localeCompare(String(b.name||""));
-  });
-  const roster=players.filter(p=>p.posted),cores=roster.filter(p=>p.core),supports=roster.filter(p=>p.primary&&isSupportPos(p.primary.position));
-  const coreFull=cores.filter(p=>p.flexFull),coreSub=cores.filter(p=>p.flexStandin&&!p.flexFull),supFlex=roster.filter(p=>p.supportFlex);
-  let verdict="No classified official positions yet.";
-  if(players.some(p=>p.classified&&!p.replaced)){
-    if(!roster.some(p=>p.classified>=3)&&!players.filter(p=>!p.replaced).some(p=>p.classified>=3))verdict="Too few official games to know if they flex.";
-    else if(coreFull.length)verdict="They flex.";
-    else if(supFlex.length&&coreSub.length)verdict="Cores stay on the same roles. They only flex support, and they shuffle when a standin is in.";
-    else if(supFlex.length)verdict="Cores stay on the same roles. They only flex support.";
-    else if(coreSub.length)verdict="Cores stay on the same roles with the full team. They move around to fit standins.";
-    else if(roster.some(p=>p.flexStandin)&&!roster.some(p=>p.flexFull||p.supportFlex))verdict="They stick to set roles with the full team. They shuffle when a standin is in.";
-    else verdict="They stick to set roles.";
-  }
-  const names=new Map(players.filter(p=>p.id!=null).map(p=>[p.id,p.name]));
-  const primary=new Map(players.filter(p=>p.id!=null&&p.primary&&!p.replaced).map(p=>[p.id,p.primary.position]));
-  const swapMap=new Map(),moveMap=new Map();
-  for(const game of lineups){
-    const rows=game.slots.filter(s=>s.id!=null&&s.position&&!replaced.has(s.id));
-    if(!game.standin){
-      for(let i=0;i<rows.length;i++){
-        for(let j=i+1;j<rows.length;j++){
-          const a=rows[i],b=rows[j],pa=primary.get(a.id),pb=primary.get(b.id);
-          if(!pa||!pb||pa===pb)continue;
-          if(a.position!==pb||b.position!==pa)continue;
-          const id1=a.id<b.id?a.id:b.id,id2=a.id<b.id?b.id:a.id,lo=Math.min(pa,pb),hi=Math.max(pa,pb),key=id1+":"+id2+":"+lo+":"+hi;
-          const e=swapMap.get(key)||{id1,id2,lo,hi,games:0};
-          e.games++;swapMap.set(key,e);
-        }
-      }
-    }else{
-      const standins=rows.filter(s=>!posted.has(s.id));
-      const standinNames=[...new Set(standins.map(s=>s.name).filter(Boolean))].sort();
-      for(const s of rows){
-        if(!posted.has(s.id))continue;
-        const pa=primary.get(s.id);
-        if(!pa||s.position===pa)continue;
-        const key=s.id+":"+s.position+":"+standinNames.join(",");
-        const e=moveMap.get(key)||{id:s.id,pos:s.position,standins:standinNames,games:0};
-        e.games++;moveMap.set(key,e);
-      }
-    }
-  }
-  const swapLines=[...swapMap.values()].sort((a,b)=>b.games-a.games).map(e=>{
-    const n1=names.get(e.id1)||"Unknown",n2=names.get(e.id2)||"Unknown";
-    return `${n1} and ${n2} swap ${POS[e.lo]} / ${POS[e.hi]} (${e.games} game${e.games===1?"":"s"})`;
-  });
-  const moveLines=[...moveMap.values()].sort((a,b)=>b.games-a.games).map(e=>{
-    const who=names.get(e.id)||"Unknown",role=POS[e.pos]||("P"+e.pos);
-    const when=e.standins.length===1?`when ${e.standins[0]} stands in`:"when a standin is in";
-    return `${who} plays ${role} ${when} (${e.games} game${e.games===1?"":"s"})`;
-  });
-  const leftover=supFlex.map(p=>`${p.name}: ${roleMix(p)}`);
-  const seen=new Set(),deduped=[];
-  for(const line of [...swapLines,...leftover,...moveLines]){
-    if(seen.has(line))continue;seen.add(line);deduped.push(line);
-  }
-  const flexHeroes=[...heroes.values()].filter(h=>h.players.size>1).map(h=>{
-    const who=[...h.players.values()].sort((a,b)=>b.games-a.games||String(a.name||"").localeCompare(String(b.name||"")));
-    const currentWho=who.filter(p=>p.id!=null&&posted.has(p.id));
-    const gone=currentWho.length<2&&who.some(p=>p.id!=null&&replaced.has(p.id));
-    return {...h,who,gone};
-  }).sort((a,b)=>b.who.length-a.who.length||b.games-a.games||heroName(a.id).localeCompare(heroName(b.id)));
-  return {players,posted,verdict,ways:deduped,flexHeroes,games:games.length,standinGames,currentGames:currentGames.length,eraFallback,replacedCount:replaced.size};
-}
-function roleMix(p){return p.roles.map(r=>`P${r.position} ${POS[r.position]} ${r.games}`).join(" · ")||"unclassified"}
-function teamRolesPanel(games,postedIds,replacedIds){
-  const d=teamRoleBreakdown(games,postedIds,replacedIds),regulars=d.players.filter(p=>p.posted),gone=d.players.filter(p=>p.replaced),extras=d.players.filter(p=>!p.posted&&!p.replaced);
-  const max=Math.max(...regulars.flatMap(p=>p.roles.map(r=>r.games)),1);
-  function playerBlock(p,withBars){
-    const badge=p.primary?`<span class="posBadge">P${p.primary.position}</span>`:`<span class="posBadge">—</span>`;
-    const tag=p.replaced?" · replaced":p.flexFull||p.supportFlex?" · flex":p.flexStandin?" · standin shuffle":"";
-    const bars=withBars&&p.roles.length?`<div class="positionBars">${p.roles.map(r=>`<div class="positionRow"><span>P${r.position} ${E(POS[r.position])}</span><div class="track"><div class="fill" style="width:${r.games/max*100}%"></div></div><span class="value">${r.games}g · ${pct(r.wins,r.games)}</span></div>`).join("")}</div>`:"";
-    return `<div class="rolePlayer">${badge}<div><b>${E(p.name||"Unknown")}</b><div class="roleMix">${E(roleMix(p))}${tag}</div>${bars}</div></div>`;
-  }
-  const roster=regulars.map(p=>playerBlock(p,true)).join("")||extras.map(p=>playerBlock(p,true)).join("");
-  const goneBody=gone.length?`<div class="contentBlock"><h3>Replaced</h3><div class="roleRoster">${gone.map(p=>playerBlock(p,false)).join("")}</div></div>`:"";
-  const extraBody=regulars.length&&extras.length?`<div class="contentBlock"><h3>Standins</h3><div class="roleRoster">${extras.map(p=>playerBlock(p,false)).join("")}</div></div>`:"";
-  const ways=d.ways;
-  const wayBody=ways.length?`<div class="keysList">${ways.map(x=>`<div class="keyItem"><b>${E(x)}</b></div>`).join("")}</div>`:`<div class="emptyAnalysis">${regulars.length?"Everyone stays on their main role.":"Need more official games to see flex patterns."}</div>`;
-  const heroBody=d.flexHeroes.length?`<div class="flexHeroList">${d.flexHeroes.map(h=>`<div class="flexHero${h.gone?' gone':''}">${heroIcon(h.id,32)}<div><b>${E(heroName(h.id))}</b><small>${E(h.who.map(p=>`${p.name} ${p.games}`).join(" · "))}</small></div></div>`).join("")}</div>`:`<div class="emptyAnalysis">No hero has been played by more than one player.</div>`;
-  const era=d.replacedCount?(d.eraFallback?"no games since replacement, roles include former players":`${d.currentGames} since replacement`):"";
-  const cap=[`${d.games} official game${d.games===1?"":"s"}`,era,d.standinGames?`${d.standinGames} with a standin`:"","positions inferred from lane, hero, and farm"].filter(Boolean).join(" · ");
-  return `<div class="card section"><p class="read">${E(d.verdict)}</p><p class="matchupCap">${E(cap)}</p><div class="roleRoster">${roster||'<div class="emptyAnalysis">No players in the official sample.</div>'}</div></div>${goneBody}${extraBody}<div class="contentBlock"><h3>How they flex</h3>${wayBody}</div><div class="contentBlock"><h3>Flex heroes</h3>${heroBody}</div>`;
-}
+__TEAM_ROLES__
 function teamRoles(side){
   const games=officialRoleGames(side);
   if(games==null)return `<div class="notice">Add a team to see official roles.</div>`;
@@ -1066,16 +928,25 @@ function paintTheme(){const t=currentTheme(),m=document.querySelector('meta[name
 function applyTheme(){try{localStorage.setItem("team-scout:theme-league",activeLeague)}catch(e){}document.documentElement.dataset.theme=themeChoice==="lotus"&&!lotusAllowed()?"sports":themeChoice;paintTheme()}
 function setTheme(t){t=THEME_COLORS[t]?t:"sports";if(t==="lotus"&&!lotusAllowed())return;themeChoice=t;try{localStorage.setItem("team-scout:theme",t)}catch(e){}applyTheme();render()}
 function scorebugSide(side){const ps=members(side),t=teamByKey(sideLoadedKey(side)),games=ps.reduce((s,p)=>s+p.official.games,0),wins=ps.reduce((s,p)=>s+p.official.wins,0),rec=t&&t.record?String(t.record).replace(/\s*-\s*/,"–"):(games?`${wins}–${games-wins}`:"");const cap=t&&t.captain;const theme=currentTheme(),meta=theme==="military"?`${side==="mine"?"Friendly":"Hostile"}${cap?`, commanded by ${E(cap)}`:""}`:theme==="lotus"?`${side==="mine"?"Allied fleet":"Enemy fleet"}${cap?`, Commander ${E(cap)}`:""}`:(cap?`Captain ${E(cap)}`:(side==="mine"?"Your team":"Opponent"));return `<div class="sbSide ${side}"><div style="min-width:0"><div class="sbName">${E(state[side+"Name"])}</div><span class="sbMeta">${meta}</span></div>${rec?`<div class="sbRec">${E(rec)}</div>`:""}</div>`}
-function scorebugContext(){const a=sideLoadedKey("mine"),b=sideLoadedKey("enemy");if(!a||!b)return "";const fixture=(DATA.matchups||[]).find(m=>(m.aKey===a&&m.bKey===b)||(m.aKey===b&&m.bKey===a));const games=(DATA.teamMatches||[]).filter(m=>{const k=[m.radiant.team_key,m.dire.team_key];return k.includes(a)&&k.includes(b)});const won=games.filter(m=>(m.radiant.team_key===a)===!!m.radiant_win).length;const h2h=games.length?`This season: ${E(state.mineName)} ${won}–${games.length-won} in games`:"First meeting this season";return `<div class="sbContext">${fixture?`<b>Week ${E(fixture.week)}</b>`:""}<span>${h2h}</span></div>`}
+function scorebugContext(){const a=sideLoadedKey("mine"),b=sideLoadedKey("enemy");if(!a||!b)return "";const fixture=(DATA.matchups||[]).find(m=>(m.aKey===a&&m.bKey===b)||(m.aKey===b&&m.bKey===a));const games=(DATA.teamMatches||[]).filter(m=>{const k=[m.radiant.team_key,m.dire.team_key];return k.includes(a)&&k.includes(b)});const won=games.filter(m=>(m.radiant.team_key===a)===!!m.radiant_win).length;const h2h=games.length?`This season: ${E(state.mineName)} ${won}–${games.length-won} in games`:"First meeting this season";return `<div class="sbContext">${fixture?.week!=null&&fixture.week!==""?`<b>Week ${E(fixture.week)}</b>`:""}<span>${h2h}</span></div>`}
 function scorebug(){return `<section class="scorebug" aria-label="Matchup">${scorebugSide("mine")}<div class="sbMid" aria-hidden="true"></div>${scorebugSide("enemy")}${scorebugContext()}</section>`}
 function mockDraftUrl(){
-  // Hands the rosters as loaded here (standins included) to the draft board,
-  // plus the posted team keys so the bot reads the right official draft book.
+  // Keep selected stand-ins first, then fill missing seats from the team's
+  // current roster. A partially selected Team Scout side still drafts as five.
   const q=new URLSearchParams();
+  if(activeLeague)q.set("league",activeLeague);
   const mk=sideLoadedKey("mine"),ek=sideLoadedKey("enemy");
+  const draftRoster=(side,key)=>{
+    const ids=[...state[side]];
+    const team=teamByKey(key);
+    for(const id of team?.roster||[])if(!ids.includes(id)&&ids.length<5)ids.push(id);
+    return ids.slice(0,5);
+  };
+  const mine=draftRoster("mine",mk);
+  const enemy=draftRoster("enemy",ek).filter(id=>!mine.includes(id));
   if(mk)q.set("mine",mk);if(ek)q.set("enemy",ek);
-  if(state.mine.length)q.set("mine_ids",state.mine.join(","));
-  if(state.enemy.length)q.set("enemy_ids",state.enemy.join(","));
+  if(mine.length)q.set("mine_ids",mine.join(","));
+  if(enemy.length)q.set("enemy_ids",enemy.join(","));
   if(state.enemyName&&state.enemyName!=="Opponent")q.set("enemy_name",state.enemyName);
   const qs=q.toString();return "/draft"+(qs?"?"+qs:"");
 }
@@ -1084,7 +955,7 @@ function mockDraftBar(){
   if(!enemy.length)return "";
   return `<div class="mockDraftBar"><div><b>Mock draft</b><span>Practice the Captains Mode pick/ban against ${E(state.enemyName)} — the bot drafts from their official records, undefeated heroes and the current patch meta.</span></div><button type="button" class="loadTeam" data-mockdraft>&#9876; Launch mock draft</button></div>`;
 }
-function matchupPage(){const mine=members('mine'),enemy=members('enemy');return `${mine.length&&enemy.length?scorebug():''}${mockDraftBar()}<div class="mirror"><div class="side mine">${overview('mine')}</div><div class="side enemy">${overview('enemy')}</div></div>${mine.length&&enemy.length?`${keysPanel(mine,enemy)}<div class="contentBlock"><h3>Wins / losses</h3><div class="mirror"><div class="side mine">${winLossPanel(mine.flatMap(p=>officialRows(p)),state.mineName)}</div><div class="side enemy">${winLossPanel(enemy.flatMap(p=>officialRows(p)),state.enemyName)}</div></div></div><div class="contentBlock"><h3>Heroes</h3><div class="mirror"><div class="side mine">${heroPanel(mine)}</div><div class="side enemy">${heroPanel(enemy)}</div></div></div><div class="contentBlock"><h3>Roles</h3><div class="mirror"><div class="side mine">${teamRoles('mine')}</div><div class="side enemy">${teamRoles('enemy')}</div></div></div>`:''}`}
+function matchupPage(){const mine=members('mine'),enemy=members('enemy');return `${mine.length&&enemy.length?scorebug():''}<div class="mirror"><div class="side mine">${overview('mine')}</div><div class="side enemy">${overview('enemy')}</div></div>${mine.length&&enemy.length?`${keysPanel(mine,enemy)}<div class="contentBlock"><h3>Wins / losses</h3><div class="mirror"><div class="side mine">${winLossPanel(mine.flatMap(p=>officialRows(p)),state.mineName)}</div><div class="side enemy">${winLossPanel(enemy.flatMap(p=>officialRows(p)),state.enemyName)}</div></div></div><div class="contentBlock"><h3>Heroes</h3><div class="mirror"><div class="side mine">${heroPanel(mine)}</div><div class="side enemy">${heroPanel(enemy)}</div></div></div><div class="contentBlock"><h3>Roles</h3><div class="mirror"><div class="side mine">${teamRoles('mine')}</div><div class="side enemy">${teamRoles('enemy')}</div></div></div>`:''}`}
 function standingsTable(rows){
   const mineKey=sideLoadedKey("mine"),enemyKey=sideLoadedKey("enemy");
   return `<div class="tableWrap"><table class="tbl standingsTbl"><thead><tr><th>Team</th><th>#</th><th>W-L</th><th></th></tr></thead><tbody>${rows.map(r=>{
@@ -1629,7 +1500,7 @@ function gameDraftLine(g){
     const ours=x.team===myNum,ban=!x.is_pick,n=(Number.isFinite(x.order)?x.order:i)+1;
     return `<span class="draftAct ${ours?"ours":"theirs"}${ban?" ban":""}" title="${ban?"Ban":"Pick"} ${n} · ${ours?"us":"them"}"><span class="draftN">${n}</span>${heroIcon(x.hero_id,28,ban)}</span>`;
   });
-  return `<div class="draftLine"><span class="draftLabel">Draft</span>${parts.join("")}</div>`;
+  return `<div class="draftLine" aria-label="Draft sequence">${parts.join("")}</div>`;
 }
 function gameRow(g,n,focusId){
   const dur=`${Math.floor(g.m.duration/60)}:${String(g.m.duration%60).padStart(2,'0')}`,side=g.isRadiant?"Radiant":"Dire";
@@ -1810,8 +1681,8 @@ function reconPrivateSection(ps){
 function reconPage(){
   const ps=members("enemy");
   const since=new Date(reconMonday()*1000).toLocaleDateString(undefined,{weekday:"long",month:"short",day:"numeric"});
-  const cap=`<p class="matchupCap">Public games since ${E(since)}. Ranked by volume so hero spam shows first.</p>`;
-  const setupBar=`<div class="teamsetup enemy" id="setup-enemy">${setup("enemy")}</div>`;
+  const cap=`<p class="matchupCap">Public games since ${E(since)}.</p>`;
+  const setupBar=`<div class="teamsetup enemy" id="setup-enemy">${setup("enemy",true,false)}</div>`;
   if(!ps.length)return `<div class="singlePage">${setupBar}${cap}<div class="notice">Add an opponent to see what they've been playing this week.</div></div>`;
   const byPlayer=ps.map(p=>{const rows=reconMatches(p);return {p,rows,heroes:reconHeroStats(rows,p.name),s:matchSummary(rows)}});
   const allRows=byPlayer.flatMap(x=>x.rows),heroes=reconTeamHeroes(ps),played=byPlayer.filter(x=>x.rows.length).length,top=heroes[0],max=Math.max(...heroes.slice(0,12).map(h=>h.games),1),wins=allRows.filter(m=>m.win).length;
@@ -1819,7 +1690,7 @@ function reconPage(){
   const metrics=`<div class="card reconTop"><div class="metrics">${metric("This week",`${wins}–${allRows.length-wins}`,`${allRows.length} player-games`)}${metric("Players active",`${played}/${ps.length}`,"with pubs since Monday")}${metric("Unique heroes",String(heroes.length))}${metric("Most played",top?E(top.name):"—",top?`${top.games}g · ${E(top.players.join(", "))}`:"no pubs this week")}${priv}</div></div>`;
   const teamHeroes=heroes.length?`<div class="contentBlock"><h3>Most played this week</h3><div class="card section"><div class="bars">${heroes.slice(0,12).map(h=>`<div class="barrow"><span>${heroIcon(h.id,18)} ${E(h.name)}</span><div class="track"><div class="fill" style="width:${h.games/max*100}%"></div></div><span class="value">${h.games}g · ${pct(h.wins,h.games)} · ${E(h.players.join(", "))}</span></div>`).join("")}</div></div></div>`:`<div class="notice">No cached public games since Monday.</div>`;
   const together=reconTogetherSection(ps);
-  const players=`<div class="contentBlock"><h3>By player</h3><div class="flexHeroList">${byPlayer.map(({p,heroes,s})=>{const lead=heroes[0],chips=heroes.length?`<div class="heroChipRow">${heroes.map(h=>`<span class="heroChip">${heroIcon(h.id,28)}<b>${E(h.name)}</b><small>${h.games}g · ${h.wins}–${h.games-h.wins}</small></span>`).join("")}</div>`:`<small>No cached pubs since Monday.</small>`;return `<div class="flexHero">${lead?heroIcon(lead.id,36):""}<div><b>${E(p.name)}</b><small>${s.games?`${s.games} games · ${s.wins}–${s.games-s.wins}`:"quiet this week"}</small>${chips}</div></div>`}).join("")}</div></div>`;
+  const players=`<div class="contentBlock"><h3>By player</h3><div class="flexHeroList">${byPlayer.map(({p,heroes,s})=>{const chips=heroes.length?`<div class="heroChipRow">${heroes.map(h=>`<span class="heroChip">${heroIcon(h.id,28)}<b>${E(h.name)}</b><small>${h.games}g · ${h.wins}–${h.games-h.wins}</small></span>`).join("")}</div>`:`<small>No cached pubs since Monday.</small>`;return `<div class="flexHero">${steamAvatar(p,36)}<div><b>${E(p.name)}</b><small>${s.games?`${s.games} games · ${s.wins}–${s.games-s.wins}`:"quiet this week"}</small>${chips}</div></div>`}).join("")}</div></div>`;
   return `<div class="singlePage">${setupBar}${cap}<div class="side enemy">${metrics}${teamHeroes}${together}${players}</div></div>`;
 }
 function adminPage(){
@@ -1910,12 +1781,25 @@ def _lotus_marks_html():
     )
 
 
+@functools.lru_cache(maxsize=1)
+def _rank_icons_json():
+    from .report_html import _rank_icon_uris
+
+    return json.dumps(_rank_icon_uris(offline=True))
+
+
 def render_page(payload):
+    from .team_rankings import team_rankings
+
+    payload = {**payload, "teamRankings": team_rankings(payload)}
     data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     data = data.replace("</", "<\\/")
     page = (
         TEMPLATE.replace("__LOTUS_BG__", _data_uri(LOTUS_BG_PATH, "image/jpeg"))
         .replace("__LOTUS_MARK__", _data_uri(LOTUS_MARK_PATH, "image/png"))
         .replace("__LOTUS_MARKS__", _lotus_marks_html())
+        .replace("__RANK_ICONS__", _rank_icons_json())
     )
+    with open(os.path.join(os.path.dirname(__file__), "team_roles.js"), encoding="utf-8") as handle:
+        page = page.replace("__TEAM_ROLES__", handle.read())
     return page.replace("__DATA__", data)

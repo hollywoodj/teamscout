@@ -95,6 +95,17 @@ class FormatTests(unittest.TestCase):
         self.assertIn("Hollywood (C)", text)
         self.assertIn("Teammate", text)
 
+    def test_roster_shows_medal_by_name_and_handles_missing_tier(self):
+        from unittest import mock
+
+        feed = json.loads(json.dumps(FEED))
+        feed["upcoming"][0]["rosters"]["a"][0]["medal"] = 75
+        with mock.patch.object(scout_bot, "load_medal_emoji_map",
+                               return_value={"75": "<:medal_75:123>"}):
+            text = scout_bot.format_roster("great leap forward", feed)
+        self.assertIn("<:medal_75:123> Hollywood (C) · Divine 5", text)
+        self.assertIn("- Teammate", text)
+
     def test_roster_unknown(self):
         text = scout_bot.format_roster("not a team", FEED)
         self.assertIn("No team matching", text)
@@ -152,7 +163,40 @@ class ChannelGateTests(unittest.TestCase):
 
 
 class RegistrationTests(unittest.TestCase):
-    def test_five_commands_register(self):
+    def test_report_autocomplete_includes_rd2l_teams(self):
+        from unittest import mock
+        rd2l = {"teams": [{"name": "Turtle Duck"}, {"name": "Team Anony: Fun Police"}]}
+        with mock.patch.object(scout_bot, "team_names", return_value=["Team Anony: Fun Police"]):
+            self.assertEqual(scout_bot.report_team_names(rd2l),
+                             ["Team Anony: Fun Police", "Turtle Duck"])
+
+    def test_second_guild_has_channel_scoped_report_and_requires_team(self):
+        import asyncio
+        from types import SimpleNamespace
+        from unittest import mock
+        import discord
+        from discord import app_commands
+
+        client = discord.Client(intents=discord.Intents.default())
+        tree = app_commands.CommandTree(client)
+        home = discord.Object(id=1)
+        rd2l = discord.Object(id=2)
+        scout_bot.register_commands(tree, home, channel_id="111")
+        scout_bot.register_commands(tree, rd2l, channel_id="222", default_team=None)
+        command = next(c for c in tree.get_commands(guild=rd2l)
+                       if c.name == "scoutingreport")
+        wrong_channel = SimpleNamespace(channel_id=111, response=mock.AsyncMock())
+        right_channel = SimpleNamespace(channel_id=222, response=mock.AsyncMock())
+        with mock.patch.object(scout_bot, "render_snapshot_async", new_callable=mock.AsyncMock) as render:
+            asyncio.run(command.callback(wrong_channel))
+            asyncio.run(command.callback(right_channel))
+        wrong_channel.response.send_message.assert_awaited_once_with(
+            "Please use this command in <#222>.", ephemeral=True)
+        right_channel.response.send_message.assert_awaited_once_with(
+            "Choose a team to scout with the `team` option.", ephemeral=True)
+        render.assert_not_awaited()
+
+    def test_scoutingreport_registers_with_existing_commands(self):
         import discord
         from discord import app_commands
 
@@ -161,7 +205,73 @@ class RegistrationTests(unittest.TestCase):
         guild = discord.Object(id=1)
         scout_bot.register_commands(tree, guild, channel_id="1550204926427267262")
         names = sorted(c.name for c in tree.get_commands(guild=guild))
-        self.assertEqual(names, ["briefing", "matchups", "recent", "roster", "standings", "week"])
+        self.assertEqual(names, ["briefing", "matchups", "recent", "roster",
+                                 "scoutingreport", "standings", "week"])
+
+    def test_scoutingreport_without_team_posts_the_prototype(self):
+        import asyncio
+        from types import SimpleNamespace
+        from unittest import mock
+        import discord
+        from discord import app_commands
+
+        client = discord.Client(intents=discord.Intents.default())
+        tree = app_commands.CommandTree(client)
+        guild = discord.Object(id=1)
+        channel_id = "1550204926427267262"
+        scout_bot.register_commands(tree, guild, channel_id=channel_id)
+        command = next(c for c in tree.get_commands(guild=guild)
+                       if c.name == "scoutingreport")
+        interaction = SimpleNamespace(channel_id=int(channel_id),
+                                      response=mock.AsyncMock(), followup=mock.AsyncMock())
+        snapshot = {"id": "05e833d7364f"}
+        snap = {"briefing": {"components": [], "attachments": []}, "dir": ROOT}
+        with mock.patch.object(scout_bot, "render_snapshot_async", new_callable=mock.AsyncMock,
+                               return_value=snapshot) as render, \
+             mock.patch.object(scout_bot, "load_snapshot", return_value=snap), \
+             mock.patch.object(scout_bot, "load_scout_env", return_value={"token": "test"}), \
+             mock.patch.object(scout_bot, "_post_replacing_briefing",
+                               return_value=({"id": "1"}, [])) as post:
+            asyncio.run(command.callback(interaction))
+        render.assert_awaited_once_with("Team Anony: Fun Police", vs=None)
+        post.assert_called_once()
+        interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+        interaction.followup.send.assert_awaited_once()
+
+
+class MedalEmojiTests(unittest.TestCase):
+    def test_snapshot_receives_medal_emoji_map_when_synced(self):
+        from unittest import mock
+
+        with mock.patch.object(scout_bot, "_medal_emoji_map_path",
+                               return_value=Path("medals.json")), \
+             mock.patch.object(scout_bot, "_emoji_map_path", return_value=None):
+            argv = scout_bot._snapshot_argv("Team", None, Path("output"))
+        self.assertEqual(argv[argv.index("--medal-emoji-map") + 1], "medals.json")
+
+    def test_sync_uses_existing_and_writes_tier_map(self):
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            original_dir = scout_bot.MEDAL_EMOJI_CACHE_DIR
+            scout_bot.MEDAL_EMOJI_CACHE_DIR = Path(tmp)
+            try:
+                with mock.patch.object(scout_bot, "load_scout_env",
+                                       return_value={"token": "fake", "application_id": "123"}), \
+                     mock.patch.object(scout_bot, "list_application_emojis",
+                                       return_value=[{"name": "medal_11", "id": "111"}]), \
+                     mock.patch.object(scout_bot, "render_medal_emoji", return_value=b"png"), \
+                     mock.patch.object(scout_bot, "create_application_emoji",
+                                       return_value={"id": "999"}) as upload:
+                    created, skipped, emoji_map = scout_bot.sync_medal_emojis()
+                saved = json.loads((Path(tmp) / "emoji_map.json").read_text())
+            finally:
+                scout_bot.MEDAL_EMOJI_CACHE_DIR = original_dir
+        self.assertEqual((created, skipped), (35, 1))
+        self.assertEqual(upload.call_count, 35)
+        self.assertEqual(emoji_map["11"], "<:medal_11:111>")
+        self.assertEqual(emoji_map["80"], "<:medal_80:999>")
+        self.assertEqual(saved, emoji_map)
 
     def test_gate_rejects_other_channel(self):
         import asyncio
@@ -188,6 +298,69 @@ class RegistrationTests(unittest.TestCase):
 
 
 class PostBriefingCLITests(unittest.TestCase):
+    def test_cleanup_retries_discord_rate_limit(self):
+        from unittest import mock
+        from urllib.error import HTTPError
+
+        limited = HTTPError("https://discord.com", 429, "rate limited",
+                            {"Retry-After": "0.5"}, io.BytesIO(b""))
+        response = object()
+        with (mock.patch.object(scout_bot.urllib.request, "urlopen",
+                                side_effect=[limited, response]) as open_url,
+              mock.patch.object(scout_bot.time, "sleep") as sleep):
+            self.assertIs(scout_bot._discord_open("request"), response)
+        self.assertEqual(open_url.call_count, 2)
+        sleep.assert_called_once_with(0.5)
+
+    def test_cleanup_removes_only_older_briefings_from_same_bot(self):
+        from unittest import mock
+
+        def message(mid, author, tab=True):
+            return {"id": str(mid), "author": {"id": author},
+                    "components": [{"type": 1, "components": [
+                        {"custom_id": "sb:tab:briefing:abc" if tab else "other"},
+                    ]}]}
+
+        rows = [message(20, "bot"), message(19, "bot"),
+                message(18, "someone-else"), message(17, "bot", tab=False)]
+        with (mock.patch.object(scout_bot, "_channel_messages", return_value=rows),
+              mock.patch.object(scout_bot, "_delete_briefing_message") as delete):
+            removed, errors = scout_bot._remove_older_briefings(
+                "channel", "token", {"id": "20", "author": {"id": "bot"}},
+            )
+        self.assertEqual((removed, errors), (1, []))
+        delete.assert_called_once_with("channel", "token", "19")
+
+    def test_cleanup_recognizes_legacy_scout_embed(self):
+        from unittest import mock
+
+        legacy = {"id": "19", "author": {"id": "bot"}, "components": [],
+                  "embeds": [{"author": {"name": "🔎 SCOUT BRIEFING · LD2L"},
+                              "footer": {"text": "Team Scout · 11 official games"}}]}
+        unrelated = {"id": "18", "author": {"id": "bot"}, "components": [],
+                     "embeds": [{"author": {"name": "Other report"},
+                                 "footer": {"text": "Team Scout · 11 official games"}}]}
+        with (mock.patch.object(scout_bot, "_channel_messages",
+                                return_value=[legacy, unrelated]),
+              mock.patch.object(scout_bot, "_delete_briefing_message") as delete):
+            removed, errors = scout_bot._remove_older_briefings(
+                "channel", "token", {"id": "20", "author": {"id": "bot"}},
+            )
+        self.assertEqual((removed, errors), (1, []))
+        delete.assert_called_once_with("channel", "token", "19")
+
+    def test_post_replaces_older_briefing_after_successful_post(self):
+        from unittest import mock
+
+        posted = {"id": "20", "author": {"id": "bot"}}
+        with (mock.patch.object(scout_bot, "_post_multipart_message", return_value=posted) as post,
+              mock.patch.object(scout_bot, "_remove_older_briefings", return_value=(1, [])) as cleanup):
+            result, errors = scout_bot._post_replacing_briefing("channel", "token", {}, [])
+        self.assertIs(result, posted)
+        self.assertEqual(errors, [])
+        post.assert_called_once()
+        cleanup.assert_called_once_with("channel", "token", posted)
+
     def test_arg_parser_wires_post_briefing_vs_and_dry_run(self):
         parser = scout_bot.build_arg_parser()
         args = parser.parse_args(
@@ -280,8 +453,16 @@ class PostBriefingCLITests(unittest.TestCase):
 
 
 class CustomIdAndTabRowTests(unittest.TestCase):
+    def test_ward_view_buttons_have_valid_ids_and_active_style(self):
+        row = scout_bot.ward_view_row("05e833d7364f", "individual")
+        self.assertEqual([button["label"] for button in row["components"]],
+                         ["Heatmap", "Individual Wards"])
+        self.assertEqual([button["style"] for button in row["components"]], [2, 1])
+        for button in row["components"]:
+            self.assertIsNotNone(scout_bot.WARD_VIEW_ID_RE.fullmatch(button["custom_id"]))
+
     def test_custom_id_regex_round_trip(self):
-        for tab in ("briefing", "wards"):
+        for tab in ("briefing", "wards", "recon"):
             custom_id = f"sb:tab:{tab}:05e833d7364f"
             match = scout_bot.CUSTOM_ID_RE.match(custom_id)
             self.assertIsNotNone(match)
@@ -298,14 +479,28 @@ class CustomIdAndTabRowTests(unittest.TestCase):
         by_tab = {c["custom_id"].split(":")[2]: c for c in row["components"]}
         self.assertEqual(by_tab["briefing"]["style"], 1)  # primary/active
         self.assertEqual(by_tab["wards"]["style"], 2)  # secondary
+        self.assertEqual(by_tab["recon"]["style"], 2)
 
         row2 = scout_bot.tab_row("05e833d7364f", "wards")
         by_tab2 = {c["custom_id"].split(":")[2]: c for c in row2["components"]}
         self.assertEqual(by_tab2["wards"]["style"], 1)
         self.assertEqual(by_tab2["briefing"]["style"], 2)
 
+        row3 = scout_bot.tab_row("05e833d7364f", "recon")
+        by_tab3 = {c["custom_id"].split(":")[2]: c for c in row3["components"]}
+        self.assertEqual(by_tab3["recon"]["style"], 1)
+        self.assertEqual(len(by_tab3), 3)
+
 
 class MultipartBodyTests(unittest.TestCase):
+    def test_wards_message_includes_toggle_only_when_snapshot_supports_it(self):
+        page = {"components": [{"type": 17, "components": []}], "attachments": []}
+        body, _ = scout_bot.build_message_body(page, ".", "05e833d7364f", "wards",
+                                               ward_view="heatmap", ward_toggle=True)
+        self.assertEqual(len(body["components"]), 3)
+        self.assertEqual([button["style"] for button in body["components"][-1]["components"]],
+                         [1, 2])
+
     def test_build_message_body_lists_attachments_and_reads_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             snap_dir = Path(tmp)
@@ -339,9 +534,15 @@ class SnapshotTests(unittest.TestCase):
                 (snap_dir / "meta.json").write_text(json.dumps({"id": "05e833d7364f"}))
                 (snap_dir / "briefing.json").write_text(json.dumps({"components": [], "attachments": []}))
                 (snap_dir / "wards.json").write_text(json.dumps({"components": [], "attachments": []}))
+                (snap_dir / "wards_individual.json").write_text(json.dumps(
+                    {"components": [{"type": 10, "content": "individual"}], "attachments": []}))
+                (snap_dir / "recon.json").write_text(json.dumps({"components": [], "attachments": []}))
                 snap = scout_bot.load_snapshot("05e833d7364f")
                 self.assertIsNotNone(snap)
                 self.assertEqual(snap["meta"]["id"], "05e833d7364f")
+                self.assertIn("recon", snap)
+                self.assertEqual(snap["wards_individual"]["components"][0]["content"],
+                                 "individual")
             finally:
                 scout_bot.SNAPSHOT_ROOT = original_root
 
@@ -351,6 +552,25 @@ class SnapshotTests(unittest.TestCase):
             scout_bot.SNAPSHOT_ROOT = Path(tmp)
             try:
                 self.assertIsNone(scout_bot.load_snapshot("05e833d7364f"))
+            finally:
+                scout_bot.SNAPSHOT_ROOT = original_root
+
+    def test_load_legacy_snapshot_keeps_existing_pages_available(self):
+        original_root = scout_bot.SNAPSHOT_ROOT
+        with tempfile.TemporaryDirectory() as tmp:
+            scout_bot.SNAPSHOT_ROOT = Path(tmp)
+            try:
+                snap_dir = Path(tmp) / "05e833d7364f"
+                snap_dir.mkdir()
+                (snap_dir / "meta.json").write_text(json.dumps({"id": "05e833d7364f"}))
+                for name in ("briefing", "wards"):
+                    (snap_dir / f"{name}.json").write_text(json.dumps(
+                        {"components": [], "attachments": []}))
+                snap = scout_bot.load_snapshot("05e833d7364f")
+                self.assertIsNotNone(snap)
+                self.assertIsNone(snap["wards_individual"])
+                self.assertIn("Run /briefing again", scout_bot.render_components_text(
+                    snap["recon"]["components"]))
             finally:
                 scout_bot.SNAPSHOT_ROOT = original_root
 
@@ -414,6 +634,31 @@ class EmojiSyncTests(unittest.TestCase):
         self.assertLessEqual(len(name), 32)
         self.assertTrue(name.startswith("h_"))
 
+    def test_face_emoji_uses_new_namespace(self):
+        self.assertEqual(scout_bot.face_emoji_name("npc_dota_hero_antimage"),
+                         "hf_antimage")
+        self.assertLessEqual(len(scout_bot.face_emoji_name(
+            "npc_dota_hero_" + "x" * 40)), 32)
+
+    def test_face_focal_points_shift_the_crop(self):
+        from PIL import Image, ImageDraw
+
+        source = Image.new("RGBA", (256, 144), "blue")
+        draw = ImageDraw.Draw(source)
+        draw.rectangle((0, 0, 115, 143), fill="red")
+        draw.rectangle((160, 0, 255, 143), fill="green")
+        buf = io.BytesIO()
+        source.save(buf, format="PNG")
+        data = buf.getvalue()
+
+        lina = Image.open(io.BytesIO(scout_bot.crop_hero_portrait(data, 25)))
+        razor = Image.open(io.BytesIO(scout_bot.crop_hero_portrait(data, 15)))
+        default = Image.open(io.BytesIO(scout_bot.crop_hero_portrait(data, 999)))
+        self.assertEqual(lina.size, (128, 128))
+        self.assertEqual(lina.getpixel((64, 64))[:3], (255, 0, 0))
+        self.assertEqual(razor.getpixel((64, 64))[:3], (0, 128, 0))
+        self.assertEqual(default.getpixel((64, 64))[:3], (0, 0, 255))
+
     def test_sync_skips_existing_emoji_names(self):
         from unittest import mock
 
@@ -443,7 +688,8 @@ class EmojiSyncTests(unittest.TestCase):
                      mock.patch.object(scout_bot, "fetch_opendota_heroes_constants",
                                         return_value=(heroes, "live")), \
                      mock.patch.object(scout_bot, "list_application_emojis",
-                                        return_value=[{"name": "h_antimage", "id": "111"}]), \
+                                        return_value=[{"name": "h_antimage", "id": "old"},
+                                                      {"name": "hf_antimage", "id": "111"}]), \
                      mock.patch.object(scout_bot, "_http_get_bytes", return_value=fake_portrait), \
                      mock.patch.object(scout_bot, "create_application_emoji", side_effect=fake_create):
                     created, skipped, emoji_map = scout_bot.sync_hero_emojis()
@@ -452,9 +698,9 @@ class EmojiSyncTests(unittest.TestCase):
 
         self.assertEqual(created, 1)
         self.assertEqual(skipped, 1)
-        self.assertEqual(created_calls, ["h_axe"])
-        self.assertEqual(emoji_map["1"], "<:h_antimage:111>")
-        self.assertEqual(emoji_map["2"], "<:h_axe:999>")
+        self.assertEqual(created_calls, ["hf_axe"])
+        self.assertEqual(emoji_map["1"], "<:hf_antimage:111>")
+        self.assertEqual(emoji_map["2"], "<:hf_axe:999>")
 
 if __name__ == "__main__":
     unittest.main()

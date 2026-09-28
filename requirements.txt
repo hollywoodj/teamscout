@@ -1,5 +1,6 @@
 requests
 openpyxl
+Pillow
 # For scout_bot.py (the Discord bot)
 discord.py==2.7.1
 python-dotenv

@@ -1,9 +1,9 @@
 """Ward placement map rendering for Team Scout (Pillow, no Discord import).
 
-Mirrors the ward-map logic in scout/team_scout_html.py (clustering, patch
-selection, world->pct mapping, dot sizing) so the Discord "Wards" page shows
-the same picture as the web report - just rendered to a PNG instead of CSS
-dots on top of an <img>.
+Mirrors the ward-map placement logic in scout/team_scout_html.py (clustering,
+patch selection, world->pct mapping, dot sizing). When Dota is installed,
+Discord uses its current minimap so 7.41 tower and ward overlays sit on the
+matching terrain; OpenDota's 7.40 image is the fallback background.
 """
 
 from __future__ import annotations
@@ -11,14 +11,21 @@ from __future__ import annotations
 import io
 import math
 import os
+import struct
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageEnhance, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 from .bbc_source import team_key as _team_key
 
 MAP_ASSET_PATH = Path(__file__).resolve().parent.parent / "cache" / "assets" / "detailed_740.jpg"
 MAP_ASSET_URL = "https://www.opendota.com/assets/images/dota2/map/detailed_740.jpg"
+CURRENT_MAP_ASSET_PATH = MAP_ASSET_PATH.parent.parent / "dota_current_minimap.png"
+# The installed map's two dota_minimap_boundary entities are at
+# (-9472, -9472) and (9472, 9472). Keep the fallback image's existing
+# ward-grid projection when the current minimap is unavailable.
+CURRENT_MAP_WORLD_BOUNDS = (-9472, 9472)
+OPENDOTA_MAP_WORLD_BOUNDS = (-8192, 8192)
 
 WARD_PATCH_NAME = "7.41"
 WARD_PATCH_FALLBACK_ID = 60
@@ -91,13 +98,18 @@ def cluster_wards(points, bin=5):
     return out
 
 
-def world_to_px(x, y, size):
-    """OpenDota grid coords (~64-192) -> pixel coords on a `size`x`size`
-    square: left=(x-64)/128, top=1-(y-64)/128 (matches wardPct in
-    team_scout_html.py)."""
-    left = (x - 64) / 128
-    top = 1 - (y - 64) / 128
+def world_to_px(x, y, size, world_bounds=OPENDOTA_MAP_WORLD_BOUNDS):
+    """Project OpenDota ward-grid coordinates onto the selected map image."""
+    low, high = world_bounds
+    world_x, world_y = (x - 128) * 128, (y - 128) * 128
+    left = (world_x - low) / (high - low)
+    top = (high - world_y) / (high - low)
     return left * size, top * size
+
+
+def _map_world_bounds(path):
+    return (CURRENT_MAP_WORLD_BOUNDS if Path(path) == CURRENT_MAP_ASSET_PATH
+            else OPENDOTA_MAP_WORLD_BOUNDS)
 
 
 def _dot_px(kind, n):
@@ -124,7 +136,7 @@ def _position_mode_and_games(rows):
     return pos, counts[pos]
 
 
-def select_map_players(payload, team, positions=(1, 4, 5)):
+def select_map_players(payload, team, positions=(1, 4, 5), excluded_names=()):
     """Pick, for each requested position, the roster player whose inferred
     position mode matches it (ties -> whichever has played more games at
     that position). A position nobody plays is skipped. Returns a list of
@@ -133,10 +145,11 @@ def select_map_players(payload, team, positions=(1, 4, 5)):
     key = team.get("key")
     roster_ids = team.get("roster") or []
 
+    excluded = {name.casefold() for name in excluded_names}
     candidates = {}  # position -> (games_at_pos, player)
     for pid in roster_ids:
         player = players_by_id.get(pid)
-        if player is None:
+        if player is None or (player.get("name") or "").casefold() in excluded:
             continue
         rows = _player_position_rows(player, key)
         pos, games = _position_mode_and_games(rows)
@@ -203,13 +216,25 @@ def player_side_wards(player, team_key, patch_id):
     return pubs
 
 
-def _load_map_image(size):
+def _map_asset_path():
+    from .dota_map_asset import ensure_current_minimap
+
     try:
-        if not MAP_ASSET_PATH.exists():
-            os.makedirs(MAP_ASSET_PATH.parent, exist_ok=True)
-            import urllib.request
-            urllib.request.urlretrieve(MAP_ASSET_URL, MAP_ASSET_PATH)
-        img = Image.open(MAP_ASSET_PATH).convert("RGB")
+        current = ensure_current_minimap(CURRENT_MAP_ASSET_PATH)
+        if current is not None:
+            return current
+    except (OSError, ValueError, struct.error):
+        pass
+    if not MAP_ASSET_PATH.exists():
+        os.makedirs(MAP_ASSET_PATH.parent, exist_ok=True)
+        import urllib.request
+        urllib.request.urlretrieve(MAP_ASSET_URL, MAP_ASSET_PATH)
+    return MAP_ASSET_PATH
+
+
+def _load_map_image(size, map_path=None):
+    try:
+        img = Image.open(map_path or _map_asset_path()).convert("RGB")
         img = img.resize((size, size), Image.LANCZOS)
         return img
     except Exception:
@@ -219,7 +244,9 @@ def _load_map_image(size):
 def _draw_ward_map(obs_points, sen_points, size, dim=False, pubs=False):
     """Render one map tile (RGBA) at `size`x`size`, supersampled internally."""
     big = size * SUPERSAMPLE
-    base = _load_map_image(big).convert("RGBA")
+    map_path = _map_asset_path()
+    bounds = _map_world_bounds(map_path)
+    base = _load_map_image(big, map_path).convert("RGBA")
 
     overlay = Image.new("RGBA", (big, big), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
@@ -228,7 +255,7 @@ def _draw_ward_map(obs_points, sen_points, size, dim=False, pubs=False):
     obs_clusters = cluster_wards(obs_points)
 
     def draw_cluster(kind, cluster, fill, border):
-        x, y = world_to_px(cluster["x"], cluster["y"], size)
+        x, y = world_to_px(cluster["x"], cluster["y"], size, bounds)
         d = _dot_px(kind, cluster["n"]) * SUPERSAMPLE
         cx, cy = x * SUPERSAMPLE, y * SUPERSAMPLE
         bbox = (cx - d / 2, cy - d / 2, cx + d / 2, cy + d / 2)
@@ -261,6 +288,52 @@ def _draw_ward_map(obs_points, sen_points, size, dim=False, pubs=False):
         combined = Image.alpha_composite(combined, dim_overlay)
 
     return combined
+
+
+def _draw_ward_heatmap(obs_points, sen_points, size, dim=False):
+    """Render additive placement density; brighter areas contain more wards."""
+    map_path = _map_asset_path()
+    bounds = _map_world_bounds(map_path)
+    base = ImageEnhance.Brightness(_load_map_image(size, map_path)).enhance(0.58).convert("RGBA")
+
+    def density(points):
+        mask = Image.new("L", (size, size))
+        diameter = 56
+        stamp = Image.new("L", (diameter, diameter))
+        ImageDraw.Draw(stamp).ellipse((23, 23, 33, 33), fill=255)
+        stamp = stamp.filter(ImageFilter.GaussianBlur(10))
+        for point in points or []:
+            try:
+                x, y = world_to_px(float(point[0]), float(point[1]), size, bounds)
+            except (IndexError, TypeError, ValueError):
+                continue
+            if not (math.isfinite(x) and math.isfinite(y) and 0 <= x < size and 0 <= y < size):
+                continue
+            left, top = round(x) - diameter // 2, round(y) - diameter // 2
+            box = (max(0, left), max(0, top), min(size, left + diameter), min(size, top + diameter))
+            if box[0] >= box[2] or box[1] >= box[3]:
+                continue
+            source = stamp.crop((box[0] - left, box[1] - top, box[2] - left, box[3] - top))
+            mask.paste(ImageChops.add(mask.crop(box), source), box)
+        return mask.point(lambda value: min(185, value * 3))
+
+    for points, color in ((obs_points, (255, 190, 65)), (sen_points, (53, 212, 229))):
+        overlay = Image.new("RGBA", (size, size), (*color, 0))
+        overlay.putalpha(density(points))
+        base = Image.alpha_composite(base, overlay)
+
+    if not obs_points and not sen_points:
+        base = Image.alpha_composite(base, Image.new("RGBA", (size, size), EMPTY_OVERLAY))
+        draw = ImageDraw.Draw(base)
+        label = "No ward maps"
+        font = _font(FONT_REGULAR, 16)
+        box = draw.textbbox((0, 0), label, font=font)
+        draw.text(((size - (box[2] - box[0])) / 2, (size - (box[3] - box[1])) / 2),
+                  label, fill="#e5e5e5", font=font)
+    if dim:
+        base = Image.alpha_composite(base, Image.new("RGBA", (size, size),
+                                                     (0, 0, 0, DIM_OVERLAY_ALPHA)))
+    return base
 
 
 def render_ward_sheet(payload, team, positions=(1, 4, 5)):
@@ -335,6 +408,46 @@ def render_ward_sheet(payload, team, positions=(1, 4, 5)):
     return buf.getvalue()
 
 
+def render_player_ward_rows(payload, team, heatmap=False):
+    """Return one two-map PNG per roster player, in roster order."""
+    players = {player.get("id"): player for player in payload.get("players") or []}
+    key = team.get("key")
+    patch_id = ward_patch_id(payload)
+    rows = []
+    for index, player_id in enumerate(team.get("roster") or [], start=1):
+        player = players.get(player_id)
+        if player is None:
+            continue
+        name = player.get("name") or "Unknown"
+        wards = player_side_wards(player, key, patch_id)
+        width = SHEET_MAP_SIZE * 2 + GAP
+        image = Image.new("RGB", (width, SHEET_MAP_SIZE), BG_COLOR)
+        for side_index, side in enumerate(("radiant", "dire")):
+            side_data = wards[side]
+            renderer = _draw_ward_heatmap if heatmap else _draw_ward_map
+            tile = renderer(side_data["obs"], side_data["sen"],
+                            SHEET_MAP_SIZE, dim=not side_data["games"])
+            short_name = name
+            suffix = f" · {side.title()}" + (" · pubs" if wards.get("pubs") else "")
+            label = short_name + suffix
+            draw = ImageDraw.Draw(tile)
+            font = _font(FONT_BOLD, 18)
+            while short_name and draw.textlength(label, font=font) > SHEET_MAP_SIZE - 40:
+                short_name = short_name[:-1]
+                label = short_name + "…" + suffix
+            label_width = draw.textlength(label, font=font)
+            draw.rounded_rectangle((10, 10, min(SHEET_MAP_SIZE - 10, label_width + 30), 44),
+                                   radius=6, fill="#111820")
+            draw.text((20, 15), label, fill=HEADER_COLOR, font=font)
+            image.paste(tile.convert("RGB"), (side_index * (SHEET_MAP_SIZE + GAP), 0))
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG", optimize=True)
+        prefix = "ward-heatmap-player" if heatmap else "ward-player"
+        rows.append((f"{prefix}-{index}.png", buffer.getvalue(),
+                     f"{name}: Radiant and Dire ward {'heatmaps' if heatmap else 'maps'}"))
+    return rows
+
+
 # --------------------------------------------------------------------------
 # Mid ward (rune to rune, before 1:00)
 # --------------------------------------------------------------------------
@@ -352,8 +465,27 @@ MID_RUNE_SPOTS = [(115.2, 136.3), (137.2, 118.7)]  # approximate rune spots
 MID_WINDOW_CX, MID_WINDOW_CY, MID_WINDOW_HALF = 126.2, 127.5, 17
 MID_WARD_CUTOFF = 60
 MID_CLUSTER_RADIUS = 2.0
+SIDE_LANE_CUTOFF = 210  # 3:30; mid keeps its 1:00 cutoff.
+# World-grid crops around the two side-lane meeting areas. The same crop is
+# shown for Radiant and Dire so their ward spots can be compared directly.
+SIDE_LANE_WINDOWS = {
+    "top": (95, 160, 27),
+    "bottom": (160, 95, 27),
+}
+# Tier 1 entity origins from the installed Dota map's
+# maps/dota/entities/default_ents.vents_c (mapunitname + origin). Keep game
+# world units here so the landmarks use the same projection as ward points.
+# These are reference markers, not match-specific alive/destroyed state.
+LANE_TOWER_WORLD = {
+    "mid": ((-1543.998535, -1407.998413, "R T1"),
+            (523.999756, 651.999817, "D T1")),
+    "top": ((-6336.0, 1856.002197, "R T1"),
+            (-5274.558105, 6036.044434, "D T1")),
+    "bottom": ((4859.866211, -6379.263184, "R T1"),
+               (6269.338867, -2240.000244, "D T1")),
+}
 
-MID_SRC_SIZE = 900  # native pixel size of detailed_740.jpg
+MID_SRC_SIZE = 900  # default for calculations using OpenDota's 7.40 image
 MID_PANEL_SIZE = 600
 MID_SUPERSAMPLE = 2
 
@@ -363,19 +495,37 @@ def in_mid_window(x, y):
     return abs(x - MID_WINDOW_CX) <= MID_WINDOW_HALF and abs(y - MID_WINDOW_CY) <= MID_WINDOW_HALF
 
 
-def _mid_to_src(x, y):
-    return ((x - 64) / 128 * MID_SRC_SIZE, (1 - (y - 64) / 128) * MID_SRC_SIZE)
+def _mid_to_src(x, y, source_size=(MID_SRC_SIZE, MID_SRC_SIZE),
+                world_bounds=OPENDOTA_MAP_WORLD_BOUNDS):
+    width, height = source_size
+    return (world_to_px(x, y, width, world_bounds)[0],
+            world_to_px(x, y, height, world_bounds)[1])
 
 
-def _mid_to_panel(x, y):
-    span = 2 * MID_WINDOW_HALF
-    px = (x - (MID_WINDOW_CX - MID_WINDOW_HALF)) / span * MID_PANEL_SIZE * MID_SUPERSAMPLE
-    py = ((MID_WINDOW_CY + MID_WINDOW_HALF) - y) / span * MID_PANEL_SIZE * MID_SUPERSAMPLE
-    return px, py
+def _game_world_to_grid(x, y):
+    """Project Source 2 origins onto OpenDota's 64..192 ward grid.
+
+    OpenDota's replay parser reports cell + local offset / 128; world origin
+    is cell 128. Keep this conversion shared by every tower landmark.
+    """
+    return 128 + x / 128, 128 + y / 128
 
 
-def _mid_clock(t):
-    return ("-" if t < 0 else "") + f"{abs(t) // 60}:{abs(t) % 60:02d}"
+def _lane_crop_box(cx, cy, half, source_size=(MID_SRC_SIZE, MID_SRC_SIZE),
+                   world_bounds=OPENDOTA_MAP_WORLD_BOUNDS):
+    left, top = _mid_to_src(cx - half, cy + half, source_size, world_bounds)
+    right, bottom = _mid_to_src(cx + half, cy - half, source_size, world_bounds)
+    return round(left), round(top), round(right), round(bottom)
+
+
+def _zoom_to_panel(x, y, cx, cy, half, source_size=(MID_SRC_SIZE, MID_SRC_SIZE),
+                   world_bounds=OPENDOTA_MAP_WORLD_BOUNDS):
+    """Place an overlay using the same rounded source crop as the image."""
+    left, top, right, bottom = _lane_crop_box(cx, cy, half, source_size, world_bounds)
+    source_x, source_y = _mid_to_src(x, y, source_size, world_bounds)
+    scale = MID_PANEL_SIZE * MID_SUPERSAMPLE
+    return ((source_x - left) / (right - left) * scale,
+            (source_y - top) / (bottom - top) * scale)
 
 
 def _draw_water_rune(draw, cx, cy, size):
@@ -388,6 +538,23 @@ def _draw_water_rune(draw, cx, cy, size):
     draw.polygon([top, right, bottom, left], fill="#3cc6e6")
     draw.polygon([top, (cx, cy + hh), left], fill="#8ff3ff")
     draw.polygon([top, right, bottom, left], outline=navy, width=width)
+
+
+def _draw_tower_marker(draw, cx, cy, side):
+    """Draw a compact tower silhouette at a lane's Tier 1 position."""
+    s = MID_SUPERSAMPLE
+    radius = 22 * s
+    fill = "#248b48" if side == "R" else "#b74747"
+    draw.ellipse((cx - radius, cy - radius, cx + radius, cy + radius),
+                 fill=fill, outline="#f2f3f5", width=2 * s)
+    # Three battlements, a tapered body, and a base read as a tower even
+    # after the supersampled lane image is reduced for Discord.
+    points = [(-12, -11), (-7, -11), (-7, -6), (-3, -6), (-3, -11),
+              (3, -11), (3, -6), (7, -6), (7, -11), (12, -11),
+              (12, -3), (9, -3), (8, 9), (-8, 9), (-9, -3), (-12, -3)]
+    draw.polygon([(cx + x * s, cy + y * s) for x, y in points], fill="#ffffff")
+    draw.rectangle((cx - 12 * s, cy + 9 * s, cx + 12 * s, cy + 12 * s),
+                   fill="#ffffff")
 
 
 def cluster_mid_spots(wards, radius=MID_CLUSTER_RADIUS):
@@ -471,27 +638,62 @@ def mid_ward_events(payload, team, cutoff=MID_WARD_CUTOFF):
     return games, wards, mid_names
 
 
-def _load_mid_map_base():
-    """The map crop base image, dimmed the same way the prototype did:
-    colour to 75%, then brightness to 85%. Not resized - detailed_740.jpg is
-    already 900x900 (MID_SRC_SIZE), matching the grid->pixel math below."""
-    base = Image.open(MAP_ASSET_PATH).convert("RGB")
-    return ImageEnhance.Brightness(ImageEnhance.Color(base).enhance(0.75)).enhance(0.85)
+def side_lane_ward_events(payload, team, lane, cutoff=SIDE_LANE_CUTOFF):
+    """First observer and every sentry per game in a side-lane crop before 3:30.
 
-
-def render_mid_ward(payload, team, cutoff=MID_WARD_CUTOFF):
-    """Render the "Mid ward before 1:00, rune to rune" sheet for `team`.
-
-    Returns (png_bytes, summary) where summary is {"radiant": {...},
-    "dire": {...}}, each {"games", "withObserver", "byTeammate",
-    "topSpotCount", "spots"}.
+    The crop is shared by both sides. Points without placement times and
+    points inside the mid window are excluded.
     """
-    games, wards, mid_names = mid_ward_events(payload, team, cutoff=cutoff)
+    if lane not in SIDE_LANE_WINDOWS:
+        raise ValueError(f"Unknown side lane: {lane}")
+    cx, cy, half = SIDE_LANE_WINDOWS[lane]
+    key = team.get("key")
+    patch_id = ward_patch_id(payload)
+    by_match = {}
+    for player in payload.get("players") or []:
+        for row in (player.get("official") or {}).get("matches") or []:
+            if row.get("team_key") == key and row.get("patch") == patch_id:
+                by_match.setdefault(row.get("match_id"), []).append(row)
 
-    base = _load_mid_map_base()
-    x0, y0 = _mid_to_src(MID_WINDOW_CX - MID_WINDOW_HALF, MID_WINDOW_CY + MID_WINDOW_HALF)
-    x1, y1 = _mid_to_src(MID_WINDOW_CX + MID_WINDOW_HALF, MID_WINDOW_CY - MID_WINDOW_HALF)
-    crop = base.crop((round(x0), round(y0), round(x1), round(y1))).resize(
+    games = {"radiant": set(), "dire": set()}
+    wards = {"radiant": [], "dire": []}
+    for match_id, rows in by_match.items():
+        side = "radiant" if rows[0].get("is_radiant") else "dire"
+        games[side].add(match_id)
+        events = []
+        for row in rows:
+            for kind, log in (("obs", row.get("obs_map") or []),
+                              ("sen", row.get("sen_map") or [])):
+                for point in log:
+                    if len(point) < 3:
+                        continue
+                    try:
+                        x, y, t = float(point[0]), float(point[1]), int(point[2])
+                    except (TypeError, ValueError):
+                        continue
+                    if (t < cutoff and abs(x - cx) <= half and abs(y - cy) <= half
+                            and not in_mid_window(x, y)):
+                        events.append({"kind": kind, "x": x, "y": y, "t": t,
+                                       "match": match_id})
+        observers = sorted((event for event in events if event["kind"] == "obs"),
+                           key=lambda event: event["t"])
+        wards[side].extend(observers[:1])
+        wards[side].extend(event for event in events if event["kind"] == "sen")
+    return games, wards
+
+
+def _load_mid_map_base():
+    """Use the current Dota map when installed; keep its native crop scale."""
+    map_path = _map_asset_path()
+    base = Image.open(map_path).convert("RGB")
+    return (ImageEnhance.Brightness(ImageEnhance.Color(base).enhance(0.75)).enhance(0.85),
+            _map_world_bounds(map_path))
+
+
+def _render_zoomed_lane(games, wards, cx, cy, half, label, cutoff, markers=(), towers=()):
+    """Draw matching Radiant/Dire crops with the mid map's spot styling."""
+    base, bounds = _load_mid_map_base()
+    crop = base.crop(_lane_crop_box(cx, cy, half, base.size, bounds)).resize(
         (MID_PANEL_SIZE * MID_SUPERSAMPLE, MID_PANEL_SIZE * MID_SUPERSAMPLE), Image.LANCZOS)
 
     def font(size, bold=False):
@@ -500,13 +702,20 @@ def render_mid_ward(payload, team, cutoff=MID_WARD_CUTOFF):
     def panel(side):
         im = crop.copy()
         draw = ImageDraw.Draw(im)
-        for rx, ry in MID_RUNE_SPOTS:
-            px, py = _mid_to_panel(rx, ry)
+        for rx, ry in markers:
+            px, py = _zoom_to_panel(rx, ry, cx, cy, half, base.size, bounds)
             _draw_water_rune(draw, px, py, 54 * MID_SUPERSAMPLE)
+
+        for world_x, world_y, tower_label in towers:
+            tx, ty = _game_world_to_grid(world_x, world_y)
+            if not (abs(tx - cx) <= half and abs(ty - cy) <= half):
+                continue
+            px, py = _zoom_to_panel(tx, ty, cx, cy, half, base.size, bounds)
+            _draw_tower_marker(draw, px, py, tower_label[0])
 
         spots = cluster_mid_spots(wards[side])
         for spot in reversed(spots):
-            px, py = _mid_to_panel(spot["x"], spot["y"])
+            px, py = _zoom_to_panel(spot["x"], spot["y"], cx, cy, half, base.size, bounds)
             n = len(spot["items"])
             is_obs = spot["kind"] == "obs"
             fill, edge = (OBS_FILL, OBS_BORDER) if is_obs else (SEN_FILL, SEN_BORDER)
@@ -519,9 +728,8 @@ def render_mid_ward(payload, team, cutoff=MID_WARD_CUTOFF):
             label_w = draw.textlength(spot["label"], font=label_font)
             draw.text((px - label_w / 2, py - radius * 0.72), spot["label"], fill=edge, font=label_font)
 
-            starred = any(not item["is_mid"] for item in spot["items"])
-            if n > 1 or starred:
-                tag = f"{n}x{'*' if starred else ''}"
+            if n > 1:
+                tag = f"{n}x"
                 tag_font = font(18 * MID_SUPERSAMPLE, True)
                 tag_w = draw.textlength(tag, font=tag_font)
                 box = (px + radius * .55, py - radius - 6 * MID_SUPERSAMPLE,
@@ -531,72 +739,30 @@ def render_mid_ward(payload, team, cutoff=MID_WARD_CUTOFF):
                           tag, fill="#f2f3f5", font=tag_font)
         return im.resize((MID_PANEL_SIZE, MID_PANEL_SIZE), Image.LANCZOS), spots
 
-    pad, gap, head_h, sub_h, list_h = 24, 24, 58, 50, 200
-    width = pad * 2 + MID_PANEL_SIZE * 2 + gap
-    height = pad + head_h + sub_h + MID_PANEL_SIZE + list_h + 40
+    gap = 24
+    width = MID_PANEL_SIZE * 2 + gap
+    height = MID_PANEL_SIZE
 
     sheet = Image.new("RGB", (width, height), BG_COLOR)
-    draw = ImageDraw.Draw(sheet)
-
-    mid_name_text = " / ".join(sorted(n for n in mid_names if n)) or "-"
-    team_label = team.get("short") or team.get("name") or team.get("key") or "Team"
-    title = f"{team_label} · Mid ward before 1:00 · Rune to rune · mid: {mid_name_text}"
-    draw.text((pad, pad - 4), title, fill=HEADER_COLOR, font=font(24, True))
-
     summary = {}
     for i, side in enumerate(("radiant", "dire")):
         im, spots = panel(side)
-        x = pad + i * (MID_PANEL_SIZE + gap)
-        y = pad + head_h
+        x = i * (MID_PANEL_SIZE + gap)
 
         g_with = len({w["match"] for w in wards[side] if w["kind"] == "obs"})
         g = len(games[side])
-        by_mid = sum(1 for w in wards[side] if w["kind"] == "obs" and w["is_mid"])
+        by_mid = sum(1 for w in wards[side] if w["kind"] == "obs" and w.get("is_mid", True))
         by_teammate = g_with - by_mid
-
-        draw.text((x, y), side.title(), fill=HEADER_COLOR, font=font(22, True))
 
         obs_spots = [s for s in spots if s["kind"] == "obs"]
         top_spot_count = len(obs_spots[0]["items"]) if obs_spots else 0
-        if not obs_spots:
-            verdict = "No early observer"
-        elif top_spot_count / max(g_with, 1) >= 0.5:
-            verdict = f"One main spot ({top_spot_count} of {g_with})"
-        else:
-            verdict = f"Spread over {len(obs_spots)} spots"
-        header_line = f"Mid observer in {g_with} of {g} games · {verdict}"
-        if by_teammate:
-            header_line += f" · {by_teammate}* by a teammate"
-        draw.text((x, y + 28), header_line, fill=LABEL_META_COLOR, font=font(17))
-
-        panel_y = y + sub_h + 6
-        sheet.paste(im, (x, panel_y))
-        draw.rectangle((x, panel_y, x + MID_PANEL_SIZE - 1, panel_y + MID_PANEL_SIZE - 1), outline="#2a3a48")
-
-        legend_y = panel_y + MID_PANEL_SIZE + 12
-        legend_font = font(15)
-        label_font = font(17, True)
-        for spot in spots:
-            def one(item):
-                hero = item.get("mid_hero") or "Unknown"
-                return f"{hero}{'' if item['is_mid'] else '*'} {_mid_clock(item['t'])}"
-
-            who = ", ".join(one(item) for item in spot["items"])
-            kind_label = "obs" if spot["kind"] == "obs" else "sen"
-            spot_fill = OBS_FILL if spot["kind"] == "obs" else SEN_FILL
-            draw.text((x, legend_y), spot["label"], fill=spot_fill, font=label_font)
-            words = f"{len(spot['items'])}x {kind_label} · {who}".split(" ")
-            line = ""
-            for word in words:
-                trial = (line + " " + word).strip()
-                if draw.textlength(trial, font=legend_font) > MID_PANEL_SIZE - 24 and line:
-                    draw.text((x + 22, legend_y), line, fill="#dbdee1", font=legend_font)
-                    legend_y += 21
-                    line = word
-                else:
-                    line = trial
-            draw.text((x + 22, legend_y), line, fill="#dbdee1", font=legend_font)
-            legend_y += 25
+        panel_draw = ImageDraw.Draw(im)
+        panel_label = f"{label} <{cutoff // 60}:{cutoff % 60:02d} · {side.title()}"
+        label_font = font(22, True)
+        label_width = panel_draw.textlength(panel_label, font=label_font)
+        panel_draw.rounded_rectangle((12, 12, label_width + 36, 49), 6, fill="#111820")
+        panel_draw.text((24, 17), panel_label, fill=HEADER_COLOR, font=label_font)
+        sheet.paste(im, (x, 0))
 
         summary[side] = {
             "games": g,
@@ -606,12 +772,74 @@ def render_mid_ward(payload, team, cutoff=MID_WARD_CUTOFF):
             "spots": len(obs_spots),
         }
 
-    footer_y = height - pad - 16
-    footer = ("First observer per game plus every sentry, rune to rune, before 1:00 (pre-horn included) "
-              "· * = placed by a teammate, not the mid · heroes are the mid's hero that game "
-              "· 7.41 officials")
-    draw.text((pad, footer_y), footer, fill="#8b949e", font=font(15))
-
     buf = io.BytesIO()
     sheet.save(buf, format="PNG", optimize=True)
     return buf.getvalue(), summary
+
+
+def render_mid_ward(payload, team, cutoff=MID_WARD_CUTOFF):
+    """Render the rune-to-rune Mid pair, retaining its 1:00 window."""
+    games, wards, _mid_names = mid_ward_events(payload, team, cutoff=cutoff)
+    return _render_zoomed_lane(games, wards, MID_WINDOW_CX, MID_WINDOW_CY,
+                               MID_WINDOW_HALF, "Mid ward", cutoff,
+                               MID_RUNE_SPOTS, LANE_TOWER_WORLD["mid"])
+
+
+def render_side_lane_ward(payload, team, lane, cutoff=SIDE_LANE_CUTOFF):
+    """Render the Top or Bottom lane pair through 3:30."""
+    games, wards = side_lane_ward_events(payload, team, lane, cutoff=cutoff)
+    cx, cy, half = SIDE_LANE_WINDOWS[lane]
+    return _render_zoomed_lane(games, wards, cx, cy, half,
+                               f"{lane.title()} lane", cutoff,
+                               towers=LANE_TOWER_WORLD[lane])
+
+
+def render_player_lane_ward_rows(payload, team):
+    """One horizontal Radiant/Dire lane pair for Mid, Pos 4, and Pos 5.
+
+    Each player's own official placements are isolated before the per-match
+    first-observer rule is applied. Supports use their offlane/safe-lane crop
+    for each side, so every image has the same visible two-map layout as the
+    full-map support ward images.
+    """
+    width = MID_PANEL_SIZE * 2 + 24
+    header_h = 52
+    height = header_h + MID_PANEL_SIZE
+    rows = []
+    selected = select_map_players(payload, team, positions=(2, 4, 5),
+                                  excluded_names=("Mareth",))
+    for position, player in selected:
+        name = player.get("name") or "Unknown"
+        player_payload = {"patches": payload.get("patches") or [], "players": [player]}
+        if position == 2:
+            lane_image = Image.open(io.BytesIO(render_mid_ward(player_payload, team)[0])).convert("RGB")
+            lane_name = "Mid"
+        else:
+            radiant_lane = "top" if position == 4 else "bottom"
+            dire_lane = "bottom" if position == 4 else "top"
+            radiant_pair = Image.open(io.BytesIO(
+                render_side_lane_ward(player_payload, team, radiant_lane)[0])).convert("RGB")
+            dire_pair = Image.open(io.BytesIO(
+                render_side_lane_ward(player_payload, team, dire_lane)[0])).convert("RGB")
+            lane_image = Image.new("RGB", (width, MID_PANEL_SIZE), BG_COLOR)
+            lane_image.paste(radiant_pair.crop((0, 0, MID_PANEL_SIZE, MID_PANEL_SIZE)), (0, 0))
+            lane_image.paste(dire_pair.crop((MID_PANEL_SIZE + 24, 0, width, MID_PANEL_SIZE)),
+                             (MID_PANEL_SIZE + 24, 0))
+            lane_name = "Offlane" if position == 4 else "Safe lane"
+        canvas = Image.new("RGB", (width, height), BG_COLOR)
+        draw = ImageDraw.Draw(canvas)
+        name_font = _font(FONT_BOLD, 25)
+        heading = f"{name} · Pos {position} · {lane_name}"
+        short_name = heading
+        while short_name and draw.textlength(short_name + ("…" if short_name != heading else ""),
+                                             font=name_font) > width - 40:
+            short_name = short_name[:-1]
+        if short_name != heading:
+            short_name += "…"
+        draw.text((20, 9), short_name, fill=HEADER_COLOR, font=name_font)
+        canvas.paste(lane_image, (0, header_h))
+        buffer = io.BytesIO()
+        canvas.save(buffer, format="PNG", optimize=True)
+        rows.append((f"lane-pos-{position}.png", buffer.getvalue(),
+                     f"{name} (Pos {position}): {lane_name} wards by Radiant and Dire"))
+    return rows

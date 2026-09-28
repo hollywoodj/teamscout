@@ -22,6 +22,30 @@ class Heroes:
         return {1: "Anti-Mage"}.get(hero_id, f"Hero {hero_id}")
 
 
+def test_rd2l_results_watcher_rebuilds_after_cache_settles(monkeypatch):
+    stamps = iter(["old", "new", "new"])
+    clock = iter([0, 11])
+    sleeps = 0
+    rebuilt = []
+
+    def sleep(_seconds):
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps > 2:
+            raise StopIteration
+
+    monkeypatch.setattr(team_scout, "rd2l_source_stamp", lambda: next(stamps))
+    monkeypatch.setattr(team_scout.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(team_scout.time, "sleep", sleep)
+    state = team_scout.TeamScoutState(53, offline=True)
+    monkeypatch.setattr(state, "_safe_build", lambda: rebuilt.append(True))
+    try:
+        state._watch_rd2l_results(interval=5, quiet_seconds=10)
+    except StopIteration:
+        pass
+    assert rebuilt == [True]
+
+
 def test_compact_match_infers_patch_and_result():
     patches = normalize_patches([
         {"id": 59, "name": "7.40", "date": "2025-12-16T00:00:00Z"},
@@ -166,7 +190,9 @@ def test_build_player_record_includes_esports_hero_pool_and_links(tmp_path):
     ])
     player = {"steam32": 105248644, "name": "Someone", "mmr": 6000}
     sections = {
-        "profile": {"profile": {"personaname": "Someone"}, "rank_tier": 65},
+        "profile": {"profile": {"personaname": "Someone",
+                                "avatarfull": "https://example.test/avatar.jpg"},
+                    "rank_tier": 65},
         "wl": {"win": 10, "lose": 5},
         "heroes": [],
         "matches": [],
@@ -176,11 +202,24 @@ def test_build_player_record_includes_esports_hero_pool_and_links(tmp_path):
     assert record["heroPool"]["heroes"] == []
     assert record["heroPool"]["gems"] == []
     assert record["heroPool"]["pubWindowDays"] == 180
+    assert record["avatar"] == "https://example.test/avatar.jpg"
     assert record["links"] == {
         "dotabuff": "https://www.dotabuff.com/players/105248644",
         "dotabuffEsports": "https://www.dotabuff.com/esports/players/105248644",
         "opendota": "https://www.opendota.com/players/105248644",
     }
+
+
+def test_roster_only_player_can_use_cached_steam_avatar(tmp_path):
+    from scout.cache import Cache
+    from scout.team_scout import _cached_avatar
+
+    cache = Cache(root=str(tmp_path))
+    cache.set_section(42, "profile", {"profile": {
+        "avatarmedium": "https://example.test/medium.jpg",
+    }})
+    assert _cached_avatar(cache, 42) == "https://example.test/medium.jpg"
+    assert _cached_avatar(cache, 43) is None
 
 
 def test_build_player_record_without_cache_reports_esports_unavailable():
@@ -192,7 +231,20 @@ def test_build_player_record_without_cache_reports_esports_unavailable():
         player, {"heroes": [], "matches": []}, Heroes(), patches, [],
     )
     assert record["esports"]["status"] == "unavailable"
+    # Missing/uncached sections are not proof that the player hid their
+    # profile; RD2L roster-only records use this same shape.
+    assert record["private"] is False
     assert record["links"]["opendota"] == "https://www.opendota.com/players/1"
+
+
+def test_build_player_record_honors_explicit_private_profile_flag():
+    record = build_player_record(
+        {"steam32": 2, "name": "Private", "mmr": 0},
+        {"profile": {"profile": {"fh_unavailable": True}},
+         "heroes": [], "matches": []},
+        Heroes(), [], [],
+    )
+    assert record["private"] is True
 
 
 def test_bbc_adapter_builds_current_team_and_official_rows(tmp_path):
@@ -420,13 +472,13 @@ def test_render_page_escapes_script_endings():
     assert "function teamRoleBreakdown" in page
     assert "function officialRoleGames" in page
     assert "Flex heroes" in page
-    assert "How they flex" in page
+    assert "Role changes and evidence" in page
     assert "<h3>Standins</h3>" in page
     assert "Also played" not in page
-    assert "They stick to set roles." in page
-    assert "They flex." in page
-    assert "Cores stay on the same roles. They only flex support." in page
-    assert "They move around to fit standins." in page
+    assert "Mostly settled roles" in page
+    assert "They flex." not in page
+    assert "Repeated support-role changes" in page
+    assert "no repeated full-roster flex shown" in page
     assert "function postedIdsFor" in page
     assert "function currentIdsFor" in page
     assert "function replacedIdsFor" in page
@@ -436,7 +488,7 @@ def test_render_page_escapes_script_endings():
     assert "<b>Replaced</b>" in page
     assert "<h3>Replaced</h3>" in page
     assert "goneHeroName" in page
-    assert "since replacement" in page
+    assert "games without former players" in page
     assert "struck through" in page
     assert "${teamRoles('mine')}" in page
     assert 'positionPanel(mine.flatMap(p=>windowMatches(p)),state.mineName)' not in page
@@ -609,6 +661,11 @@ def test_render_page_has_heroes_and_esports_subtabs():
     assert "function playerHeroesTab" in page
     assert "function playerEsportsTab" in page
     assert "function heroGemsCard" in page
+    assert 'class="metrics detailMetrics attackMetrics"' not in page
+    assert "function heroAttackMetrics" in page
+    assert '${heroAttackMetrics(p.heroPool)}</div></div><div class="contentBlock">${winLossPanel(rows)}' in page
+    assert "Win rate by hero attack type</h3>" not in page
+    assert "heroAttackSplitCard" not in page
     assert "Hidden gems" in page
     assert "No hidden gems: nothing outside their comfort picks clears the bar yet." in page
     assert "Esports profile" in page

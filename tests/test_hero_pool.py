@@ -1,4 +1,5 @@
 from scout.hero_pool import build_hero_pool
+from scout.hero_attack import attack_type
 
 NOW = 1_700_000_000
 DAY = 86400
@@ -122,3 +123,27 @@ def test_no_gems_returns_empty_list_not_an_error():
     assert result["gems"] == []
     assert result["heroes"] == []
     assert result["pubWindowDays"] == 180
+
+
+def test_attack_type_win_rates_use_each_players_picked_hero():
+    heroes = [
+        {"id": 1, "name": "Anti-Mage", "games": 10, "wins": 6, "last": NOW},
+        {"id": 6, "name": "Drow Ranger", "games": 20, "wins": 8, "last": NOW},
+    ]
+    pubs = [
+        _pub_row(1, win=True), _pub_row(1, win=False),
+        _pub_row(6, win=True), _pub_row(6, win=True),
+        _pub_row(6, win=False),
+        _pub_row(6, at=NOW - 181 * DAY, win=True),
+        _pub_row(999, win=True),  # unknown heroes are not guessed as melee
+    ]
+    result = build_hero_pool(heroes, pubs, [], [], now=NOW)
+    split = result["attackSplit"]
+    assert split["melee"]["recent"] == {"games": 2, "wins": 1, "winrate": 50.0}
+    assert split["ranged"]["recent"] == {"games": 3, "wins": 2, "winrate": 66.7}
+    assert split["melee"]["lifetime"] == {"games": 10, "wins": 6, "winrate": 60.0}
+    assert split["ranged"]["lifetime"] == {"games": 20, "wins": 8, "winrate": 40.0}
+    by_id = {row["id"]: row for row in result["heroes"]}
+    assert by_id[1]["attackType"] == "Melee"
+    assert by_id[6]["attackType"] == "Ranged"
+    assert attack_type(999) is None

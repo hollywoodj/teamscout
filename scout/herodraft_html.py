@@ -26,7 +26,7 @@ PAGE = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Captains Mode — LD2L</title>
+<title>Mock Draft — LD2L</title>
 <style>
 :root{
   /* background — the client's blue-grey slate, not near-black */
@@ -42,12 +42,10 @@ PAGE = r"""<!DOCTYPE html>
   --go:#6B9A22; --go-hi:#84B92C; --good:#9BBF4A; --bad:#D65B45;
   --reserve-fill:#3B5068;
   --ui:"Segoe UI","Noto Sans",-apple-system,system-ui,Arial,sans-serif;
-  /* tile scales with whichever dimension is tighter, so the four attribute
-     groups (six rows each) always fit the leftover height without a page
-     scroll, but never outgrow the available width either. Sized off the
-     grid panel's own (container-query) width, not the viewport's, so it
-     shrinks correctly when the hints drawer or draft panel take width. */
-  --tile:clamp(26px, min(calc(4.5cqw - 4px), 9vh), 84px);
+  /* Hero cards in the client are wide landscape portraits. The picker sizes
+     from its own panel so the draft column and optional hints drawer never
+     make the cards collapse into tiny squares. */
+  --tile:clamp(34px, 5.05cqw, 78px);
   /* Dota's real player-slot colours, roster order */
   --slotr1:#3375FF; --slotr2:#66FFBF; --slotr3:#BF00BF; --slotr4:#F3F00B; --slotr5:#FF6B00;
   --slotd1:#FE86C2; --slotd2:#A1B447; --slotd3:#65D9F7; --slotd4:#008321; --slotd5:#A46900;
@@ -59,8 +57,8 @@ body{
     linear-gradient(180deg, var(--bg-top) 0%, var(--bg-edge) 68%);
   color:var(--ink);
   font:400 13px/1.45 var(--ui); font-variant-numeric:tabular-nums;
-  min-height:100vh; padding:10px 14px}
-h1{font-size:15px; font-weight:600; letter-spacing:.22em; text-transform:uppercase;
+  min-height:100vh; padding:8px 12px}
+h1{font-size:25px; font-weight:600; letter-spacing:.22em; text-transform:uppercase;
   color:var(--ink-hi); text-align:center}
 .sub{text-align:center; color:var(--ink-dim); font-size:11px; letter-spacing:.12em;
   text-transform:uppercase; margin:3px 0 10px}
@@ -93,27 +91,44 @@ select{margin-bottom:6px}
   text-transform:uppercase; margin-bottom:9px; color:var(--ink)}
 .tcol.mine{border-top:2px solid var(--radiant)}
 .tcol.enemy{border-top:2px solid var(--dire)}
-.chips{min-height:32px; margin:8px 0; display:flex; flex-wrap:wrap; gap:5px}
-.chip{background:var(--panel-lit); border:1px solid var(--rule-hi); padding:3px 9px;
-  border-radius:2px; font-size:11.5px; cursor:pointer; white-space:nowrap}
-.chip:hover{border-color:var(--dire); color:var(--ink-dim); text-decoration:line-through}
-.chip b{color:var(--ink-hi); font-weight:600}
-.plist{max-height:214px; overflow-y:auto; border:1px solid var(--rule); margin-top:6px;
-  background:#0E1218}
-.prow{padding:4px 9px; font-size:12px; cursor:pointer; display:flex;
-  justify-content:space-between; gap:10px}
-.prow:hover{background:var(--panel-lit); color:var(--ink-hi)}
-.prow .meta{color:var(--ink-dim)}
-.opts{display:flex; gap:44px; justify-content:center; margin:18px 0; flex-wrap:wrap}
+.rosterlist{display:grid; gap:3px; margin-top:8px}
+.rostername{font-size:14px; font-weight:600; color:var(--ink-hi); margin-bottom:3px}
+.rosterplayer{display:flex; align-items:center; gap:9px; min-height:32px;
+  padding:3px 7px; background:var(--panel-lit); border:1px solid var(--rule)}
+.rosterplayer a{color:var(--ink-hi); text-decoration:none; min-width:0; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap}
+.rosterplayer a:hover{text-decoration:underline}
+.rosterplayer .medallink{display:inline-flex; flex:none; overflow:visible}
+.rosterplayer.captain{border-color:var(--rule-hi)}
+.captainmark{width:24px; height:24px; display:inline-grid; place-items:center; flex:none}
+.captainmark svg{width:100%; height:100%; display:block}
+.medal{position:relative; width:27px; height:27px; flex:none; display:inline-block}
+.medal img{position:absolute; inset:0; width:100%; height:100%; object-fit:contain}
+.medal.unknown{display:grid; place-items:center; color:var(--ink-dim); font-size:11px}
+.rosteravatar{position:relative; display:inline-grid; place-items:center; flex:none; width:27px; height:27px; overflow:hidden; border:1px solid var(--rule-hi); border-radius:3px; background:var(--panel); color:var(--ink-dim); font-size:11px; font-weight:700}
+.rosteravatar img{position:absolute; inset:0; width:100%; height:100%; object-fit:cover}
+.rosterempty{color:var(--ink-dim); padding:6px 2px}
+@media(max-width:700px){.teamcols{flex-direction:column}}
+.opts{display:flex; justify-content:center; margin:18px 0}
 .opt h3{font-size:10.5px; letter-spacing:.16em; text-transform:uppercase;
   color:var(--ink-dim); text-align:center; margin-bottom:6px; font-weight:600}
 .seg{display:flex; border:1px solid var(--rule-hi); border-radius:2px; overflow:hidden}
 .seg button{border:0; border-right:1px solid var(--rule-hi); background:transparent;
   color:var(--ink-dim); padding:7px 15px}
 .seg button:last-child{border-right:0}
-.seg button.on{background:var(--panel-lit); color:var(--ink-hi)}
+.seg button.on,.randomBoth.on{background:var(--panel-lit); color:var(--ink-hi)}
+.sideopts{width:min(100%, 330px)}
+.sideopts .seg + .seg{margin-top:6px}
+.sideopts .seg button{flex:1; min-width:0}
+.randomBoth{width:100%; margin-top:6px; padding:7px 15px}
 .startrow{text-align:center; margin-top:4px}
 .startrow button{font-size:13px; padding:11px 46px; letter-spacing:.18em}
+.setupmusic{display:flex; align-items:center; justify-content:center; flex-wrap:wrap;
+  gap:9px; margin:14px auto 0; color:var(--ink-dim); font-size:11px}
+.setupmusic button{padding:5px 10px}
+.setupmusic input{width:90px; accent-color:var(--ink-dim)}
+.setupmusic span{min-width:100px; max-width:240px; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap}
 .warn{text-align:center; color:var(--bad); font-size:11.5px; min-height:16px; margin-top:9px}
 
 /* ================= board ================= */
@@ -123,7 +138,8 @@ select{margin-bottom:6px}
 body.drafting h1, body.drafting .sub{display:none}
 
 /* --- top bar: icons, rosters, clock, reserve, turn heading --- */
-.topbar{flex:0 0 auto; position:relative; padding-top:2px}
+.topbar{flex:0 0 auto; position:relative; padding:7px 10px 5px;
+  background:rgba(17,22,28,.76); border:1px solid var(--rule); border-radius:2px}
 .topicons{position:absolute; top:0; left:0; display:flex; align-items:center; gap:4px;
   z-index:3}
 .iconbtn{background:transparent; border:1px solid transparent; color:var(--ink-dim);
@@ -135,6 +151,10 @@ body.drafting h1, body.drafting .sub{display:none}
 .volslider{width:64px; accent-color:var(--ink-dim); vertical-align:middle}
 .rosterrow{display:flex; align-items:flex-end; justify-content:center; gap:4vw;
   padding-top:2px}
+.teamcluster{display:flex; flex-direction:column; align-items:center; gap:4px}
+.teamlabel{font:700 10px var(--ui); letter-spacing:.18em; text-transform:uppercase}
+.teamcluster.radiant .teamlabel{color:var(--radiant)}
+.teamcluster.dire .teamlabel{color:var(--dire)}
 .teamcards{display:flex; gap:.6vw}
 .pcard{width:clamp(46px, 5.4vw, 78px); display:flex; flex-direction:column;
   align-items:center; gap:3px; position:relative}
@@ -158,8 +178,8 @@ body.drafting h1, body.drafting .sub{display:none}
 .clock.reserve{color:var(--bad)}
 .cmlabel{font:700 10.5px var(--ui); letter-spacing:.22em; text-transform:uppercase;
   color:var(--ink-dim); margin-top:2px}
-.turnheading{text-align:center; font:300 clamp(15px,2vw,29px)/1.3 var(--ui);
-  letter-spacing:.1em; text-transform:uppercase; color:var(--ink-hi); margin-top:4px}
+.turnheading{text-align:center; font:600 clamp(12px,1.15vw,18px)/1.3 var(--ui);
+  letter-spacing:.18em; text-transform:uppercase; color:var(--ink-hi); margin-top:6px}
 .turnheading.enemyturn{color:var(--ink-dim)}
 
 /* --- main row: hero grid + optional hints drawer + draft column --- */
@@ -169,20 +189,18 @@ body.drafting h1, body.drafting .sub{display:none}
   padding:7px 9px; overflow-x:auto; container-type:inline-size}
 .gridtop{display:flex; align-items:center; justify-content:space-between; gap:10px;
   margin-bottom:6px; flex:0 0 auto}
-.gridtop input{max-width:260px}
+.gridtop select{width:150px; margin:0; flex:0 0 auto}
+.gridtop input{max-width:220px; margin-left:auto}
+.randomHero{flex:0 0 auto; padding:6px 11px; font-size:10px}
 .hintsbtn{font-size:10px; padding:6px 14px; flex:0 0 auto}
 .hintsbtn.on{background:linear-gradient(180deg,var(--panel-lit),var(--rule-hi));
   color:var(--ink-hi); border-color:var(--ink-dim)}
-/* herogrid is sized to its content (sizeHeroGrid() sets an explicit pixel
-   height on it, computed from real measurements), NOT stretched with flex:1
-   — a stretched flex:1 row lets each attribute group's grid grow taller than
-   its tiles can (capped at 1.6x tile width), which leaves a visible gap
-   under every row. Sizing to content instead means any leftover vertical
-   room in .gridwrap collapses into a single gap below the whole grid. */
-.herogrid{flex:0 0 auto; display:flex; gap:12px; align-items:stretch;
+/* Keep the picker sized to its content. Empty space belongs below the grid,
+   not between every portrait row. */
+.herogrid{flex:0 0 auto; display:flex; gap:16px; align-items:flex-start;
   justify-content:center}
 .attrgroup{display:flex; flex-direction:column; flex:0 0 auto; min-height:0}
-.attrhead{display:flex; align-items:center; gap:6px; margin-bottom:6px; padding-bottom:4px;
+.attrhead{display:flex; align-items:center; justify-content:center; gap:6px; margin-bottom:6px; padding-bottom:4px;
   border-bottom:1px solid var(--rule); flex:0 0 auto}
 .attrhead .dot{width:8px; height:8px; transform:rotate(45deg)}
 .attrhead span{font-size:9.5px; letter-spacing:.16em; text-transform:uppercase;
@@ -192,13 +210,13 @@ body.drafting h1, body.drafting .sub{display:none}
    so every tile in every group gets the same height. minmax(0,1fr) rows
    divide up #heroGrid's own JS-measured height (sizeHeroGrid()) exactly, so
    there's no per-row slack for the image to fall short of. */
-.grid{display:grid; gap:3px; flex:1; min-height:0}
-.tile{width:var(--tile); height:100%; cursor:pointer; position:relative}
-.tile .im{width:100%; height:100%; background:#0E1218;
+.grid{display:grid; gap:4px; flex:0 0 auto; min-height:0}
+.tile{width:var(--tile); cursor:pointer; position:relative}
+.tile .im{width:100%; aspect-ratio:16 / 9; background:#0E1218;
   border:1px solid var(--rule); border-radius:1px; overflow:hidden; display:flex;
   align-items:center; justify-content:center;
-  /* safety bounds only — sizeHeroGrid() already keeps rows within this range */
-  min-height:calc(var(--tile)*0.56); max-height:calc(var(--tile)*2.3)}
+  /* Dota's picker uses short, wide hero portraits rather than square tiles. */
+  min-height:0}
 .tile .im img{width:100%; height:100%; object-fit:cover; object-position:50% 30%;
   display:block}
 .tile:hover .im{border-color:var(--ink-hi)}
@@ -278,7 +296,7 @@ body.drafting h1, body.drafting .sub{display:none}
 .schead.mine{color:var(--good)} .schead.enemy{color:var(--bad)}
 
 /* --- right column: the 24-step draft panel + the action box under it --- */
-.rightcol{flex:0 0 clamp(300px, 23vw, 400px); display:flex; flex-direction:column;
+.rightcol{flex:0 0 clamp(360px, 30vw, 520px); display:flex; flex-direction:column;
   gap:6px; min-height:0}
 .draftpanel{flex:1; min-height:0; background:var(--slab); border:1px solid var(--rule);
   border-radius:2px; display:flex; flex-direction:column; overflow:hidden}
@@ -358,6 +376,20 @@ body.drafting h1, body.drafting .sub{display:none}
   color:#0E1408}
 .lockbtn.pick:hover:not(:disabled){filter:brightness(1.12); color:#0E1408}
 
+/* The client keeps communication below the ban/pick board. The practice
+   board has no chat transport, but preserving the surface and proportions
+   makes the draft composition match the in-client hierarchy. */
+.communication{display:flex; flex-direction:column; min-height:126px; flex:0 0 19%;
+  background:rgba(13,17,22,.88); border:1px solid var(--rule); border-radius:2px;
+  overflow:hidden}
+.communication h3{flex:0 0 auto; text-align:center; padding:6px 0 5px;
+  color:var(--ink-hi); font:600 10px var(--ui); letter-spacing:.28em;
+  text-transform:uppercase; border-bottom:1px solid var(--rule)}
+.communication .chatbody{flex:1; min-height:0; padding:10px 12px; color:#66727E;
+  font-size:11px; background:linear-gradient(135deg,rgba(36,47,58,.2),transparent 60%)}
+.communication .chatline{border-top:1px solid rgba(74,91,107,.35); padding-top:7px;
+  margin-top:7px; color:#84909C}
+
 /* --- summary --- */
 .overlay{display:none; position:fixed; inset:0; background:rgba(6,9,13,.9); z-index:50;
   align-items:center; justify-content:center}
@@ -421,8 +453,8 @@ body.burning .clock.reserve{animation:ticktock 1s steps(1) infinite}
 <div class="vignette" aria-hidden="true"></div>
 <div class="burn" aria-hidden="true"></div>
 <div class="wrap">
-  <h1>Captains Mode</h1>
-  <div class="sub" id="subLine">Captains Mode · __LABEL__</div>
+  <h1>Mock Draft</h1>
+  <div class="sub" id="subLine">Patch</div>
   <div class="backrow" id="backRow" style="display:none"><a href="/" id="backLink">&larr; Back to Team Scout</a></div>
 
   <!-- ================= SETUP ================= -->
@@ -431,34 +463,34 @@ body.burning .clock.reserve{animation:ticktock 1s steps(1) infinite}
       <div class="tcol mine">
         <h2>Your team</h2>
         <select id="mineLeague" aria-label="Your Team Scout team"></select>
-        <div class="chips" id="mineChips"></div>
-        <input type="text" id="mineSearch" placeholder="Search players" aria-label="Search players for your team">
-        <div class="plist" id="mineList"></div>
+        <div class="rosterlist" id="mineChips"></div>
       </div>
       <div class="tcol enemy">
         <h2>Opposition</h2>
         <select id="enemyLeague" aria-label="Opposition Team Scout team"></select>
-        <input type="text" id="enemyName" placeholder="Opposition team name" style="margin-bottom:6px" aria-label="Opposition team name">
-        <div class="chips" id="enemyChips"></div>
-        <input type="text" id="enemySearch" placeholder="Search players" aria-label="Search players for the opposition">
-        <div class="plist" id="enemyList"></div>
+        <div class="rosterlist" id="enemyChips"></div>
       </div>
     </div>
     <div class="opts">
-      <div class="opt"><h3>First pick</h3>
-        <div class="seg" id="firstSeg">
-          <button data-v="me">You</button><button data-v="enemy">Opposition</button>
-          <button data-v="random" class="on">Random</button>
+      <section class="opt sideopts" aria-labelledby="yourSideHeading"><h3 id="yourSideHeading">Your Side</h3>
+        <div class="seg" id="firstSeg" role="group" aria-label="Pick order">
+           <button type="button" data-v="me" class="on" aria-pressed="true">First Pick</button>
+           <button type="button" data-v="enemy" aria-pressed="false">Second Pick</button>
         </div>
-      </div>
-      <div class="opt"><h3>Your side</h3>
-        <div class="seg" id="sideSeg">
-          <button data-v="radiant">Radiant</button><button data-v="dire">Dire</button>
-          <button data-v="random" class="on">Random</button>
+        <div class="seg" id="sideSeg" role="group" aria-label="Map side">
+           <button type="button" data-v="radiant" class="on" aria-pressed="true">Radiant</button>
+           <button type="button" data-v="dire" aria-pressed="false">Dire</button>
         </div>
-      </div>
+        <button type="button" id="randomBoth" class="randomBoth" aria-pressed="false"
+                aria-label="Random pick order and map side">Random</button>
+      </section>
     </div>
     <div class="startrow"><button id="startBtn" class="primary">Start draft</button></div>
+    <div class="setupmusic">
+      <button type="button" id="setupMusicBtn" aria-label="Play music">Play music</button>
+      <input type="range" id="setupVolumeSlider" min="0" max="100" value="50" aria-label="Music volume">
+      <span id="setupMusicTrack" aria-live="polite"></span>
+    </div>
     <div class="warn" id="setupWarn"></div>
   </div>
 
@@ -472,7 +504,10 @@ body.burning .clock.reserve{animation:ticktock 1s steps(1) infinite}
         <button id="resetBtn" class="iconbtn leave" type="button" aria-label="Leave draft">Leave draft</button>
       </div>
       <div class="rosterrow">
-        <div class="teamcards" id="cardsL"></div>
+        <div class="teamcluster radiant">
+          <div class="teamlabel">The Radiant</div>
+          <div class="teamcards" id="cardsL"></div>
+        </div>
         <div class="clockblock">
           <div class="reservebox"><div class="rlabel">Reserve</div><div class="rtime" id="rvL">--</div></div>
           <div class="clockcol">
@@ -481,7 +516,10 @@ body.burning .clock.reserve{animation:ticktock 1s steps(1) infinite}
           </div>
           <div class="reservebox"><div class="rlabel">Reserve</div><div class="rtime" id="rvR">--</div></div>
         </div>
-        <div class="teamcards" id="cardsR"></div>
+        <div class="teamcluster dire">
+          <div class="teamlabel">The Dire</div>
+          <div class="teamcards" id="cardsR"></div>
+        </div>
       </div>
       <div class="turnheading" id="turnHeading" aria-live="polite">&nbsp;</div>
     </div>
@@ -489,7 +527,11 @@ body.burning .clock.reserve{animation:ticktock 1s steps(1) infinite}
     <div class="mainrow">
       <div class="gridwrap">
         <div class="gridtop">
+          <select class="heroFilter" aria-label="Hero filter">
+            <option>All heroes</option>
+          </select>
           <input type="text" id="heroSearch" placeholder="Search heroes" aria-label="Search heroes">
+          <button id="randomHero" class="randomHero" type="button" disabled>Random</button>
           <button id="hintsToggle" class="hintsbtn" type="button" aria-pressed="false">Hints</button>
         </div>
         <div id="heroGrid"></div>
@@ -517,8 +559,8 @@ body.burning .clock.reserve{animation:ticktock 1s steps(1) infinite}
       <div class="rightcol">
         <div class="draftpanel" id="draftPanel">
           <div class="dpheader">
-            <div class="dpcol radiant" id="dpHeadL">Radiant</div>
-            <div class="dpcol dire" id="dpHeadR">Dire</div>
+            <div class="dpcol radiant" id="dpHeadL">The Radiant</div>
+            <div class="dpcol dire" id="dpHeadR">The Dire</div>
           </div>
           <div class="dpbody" id="dpBody"></div>
         </div>
@@ -532,6 +574,13 @@ body.burning .clock.reserve{animation:ticktock 1s steps(1) infinite}
           </div>
           <button id="lockBtn" class="lockbtn" disabled>Select a hero</button>
         </div>
+        <section class="communication" aria-label="Communication">
+          <h3>Communication</h3>
+          <div class="chatbody">
+            <div>Draft communication</div>
+            <div class="chatline">Practice mode · team chat is disabled</div>
+          </div>
+        </section>
       </div>
     </div>
   </div>
@@ -550,8 +599,13 @@ body.burning .clock.reserve{animation:ticktock 1s steps(1) infinite}
 
 <script>
 const HEROES = __HEROES__;   // hid -> {n, key, attr}
-const POOL   = __POOL__;     // [{steam32, name, mmr, role}]
-const LEAGUE = __LEAGUE__;   // [{key, name, short, roster}]
+const POOL   = __POOL__;     // [{steam32, name, mmr, role, rankTier, avatar}]
+const LEAGUE = __LEAGUE__;   // [{key, name, short, captain, captainId, roster}]
+const RANK_ICONS = __RANK_ICONS__; // cached medal art, available offline
+const DRAFT_LEAGUE = new URLSearchParams(location.search).get("league") || "";
+const AVAILABLE_TEAMS = DRAFT_LEAGUE
+  ? LEAGUE.filter(t => String(t.league || "").toLowerCase() === DRAFT_LEAGUE)
+  : LEAGUE;
 const CDN = "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/";
 /* attribute colours as the client shows them */
 const ATTRS = [["str","Strength","#EE3B21"],["agi","Agility","#26E030"],
@@ -565,7 +619,9 @@ const SLOT_COLORS = {
 let ST = null;
 let mineSel = [], enemySel = [];
 let mineKey = "", enemyKey = "";
-let firstChoice = "random", sideChoice = "random";
+let enemyName = "Opposition";
+let launchRosterError = "";
+let firstChoice = "me", sideChoice = "radiant";
 let selectedHid = null;
 let heroQuery = "";
 
@@ -579,7 +635,9 @@ function img(hid){
          '" onerror="this.onerror=null;this.replaceWith(document.createTextNode(this.alt))">';
 }
 function hname(hid){ const h = HEROES[hid]; return h ? h.n : ("#"+hid); }
-function post(url, body){ return fetch(url, {method:"POST",
+function draftApi(url){ return DRAFT_LEAGUE ? url + "?league=" +
+  encodeURIComponent(DRAFT_LEAGUE) : url; }
+function post(url, body){ return fetch(draftApi(url), {method:"POST",
   headers:{"Content-Type":"application/json"}, body:JSON.stringify(body||{})})
   .then(r=>r.json()).catch(()=>({ok:false,msg:"server unreachable"})); }
 function fmtClock(s){ s = Math.max(0, Math.ceil(s));
@@ -611,6 +669,88 @@ let volume = 0.5;
 try { const s = localStorage.getItem("hd_sound"); if (s !== null) soundOn = s === "1"; } catch (e) {}
 try { const v = localStorage.getItem("hd_volume"); if (v !== null && !isNaN(+v)) volume = Math.min(1, Math.max(0, +v)); } catch (e) {}
 let musicEl = null, musicFading = false;
+const setupMusicEl = new Audio();
+let setupTracks = [], setupQueue = [], lastSetupTrack = null;
+let setupMusicEnabled = true;
+
+function updateSetupMusicUI(){
+  const button = document.getElementById("setupMusicBtn");
+  button.textContent = setupMusicEl.paused ? "Play music" : "Pause music";
+  button.setAttribute("aria-label", button.textContent);
+  document.getElementById("setupVolumeSlider").value = Math.round(volume * 100);
+  document.getElementById("setupMusicTrack").textContent =
+    lastSetupTrack ? lastSetupTrack.replace(/\.[^.]+$/, "") :
+    (setupTracks.length ? "" : "No songs in Music");
+}
+async function loadSetupTracks(startWhenReady=true){
+  try {
+    const r = await fetch("/draft/music", {cache:"no-store"});
+    if (r.ok){
+      const names = await r.json();
+      if (Array.isArray(names)){
+        const updated = names.filter(n => typeof n === "string");
+        if (updated.join("\0") !== setupTracks.join("\0")) setupQueue = [];
+        setupTracks = updated;
+      }
+    }
+  } catch (e) {}
+  updateSetupMusicUI();
+  if (startWhenReady && ST && ST.phase === "setup") playSetupMusic();
+}
+function nextSetupTrack(){
+  if (!setupTracks.length) return false;
+  if (!setupQueue.length){
+    setupQueue = setupTracks.slice();
+    for (let i = setupQueue.length - 1; i > 0; i--){
+      const j = Math.floor(Math.random() * (i + 1));
+      [setupQueue[i], setupQueue[j]] = [setupQueue[j], setupQueue[i]];
+    }
+    if (setupQueue.length > 1 && setupQueue[setupQueue.length - 1] === lastSetupTrack)
+      [setupQueue[0], setupQueue[setupQueue.length - 1]] =
+        [setupQueue[setupQueue.length - 1], setupQueue[0]];
+  }
+  lastSetupTrack = setupQueue.pop();
+  setupMusicEl.src = "/draft/music/" + encodeURIComponent(lastSetupTrack);
+  setupMusicEl.volume = soundOn ? volume * SOUND_VOL.music : 0;
+  updateSetupMusicUI();
+  return true;
+}
+function playSetupMusic(){
+  if (!setupMusicEnabled || !soundOn || !ST || ST.phase !== "setup") return;
+  if (!setupMusicEl.paused) return;
+  if (!setupMusicEl.src && !nextSetupTrack()) return;
+  setupMusicEl.play().then(updateSetupMusicUI).catch(updateSetupMusicUI);
+}
+setupMusicEl.addEventListener("ended", async () => {
+  setupMusicEl.removeAttribute("src");
+  await loadSetupTracks(false);
+  if (nextSetupTrack()) playSetupMusic();
+});
+document.getElementById("setupMusicBtn").onclick = () => {
+  markInteracted();
+  if (!setupMusicEl.paused){
+    setupMusicEnabled = false;
+    setupMusicEl.pause();
+  } else {
+    setupMusicEnabled = true;
+    soundOn = true;
+    try { localStorage.setItem("hd_sound", "1"); } catch (e) {}
+    applySoundUI();
+    playSetupMusic();
+  }
+  updateSetupMusicUI();
+};
+document.getElementById("setupVolumeSlider").oninput = e => {
+  volume = Math.max(0, Math.min(1, e.target.value / 100));
+  try { localStorage.setItem("hd_volume", String(volume)); } catch (e) {}
+  applySoundUI();
+};
+document.getElementById("setup").addEventListener("pointerdown", e => {
+  if (!e.target.closest("#setupMusicBtn")) playSetupMusic();
+});
+document.getElementById("setup").addEventListener("keydown", e => {
+  if (e.key !== "Tab" && !e.target.closest("#setupMusicBtn")) playSetupMusic();
+});
 
 function markInteracted(){
   userInteracted = true;
@@ -729,12 +869,15 @@ function applySoundUI(){
   btn.setAttribute("aria-pressed", soundOn ? "true" : "false");
   document.getElementById("volumeSlider").value = Math.round(volume * 100);
   if (musicEl && !musicFading) musicEl.volume = soundOn ? volume * SOUND_VOL.music : 0;
+  setupMusicEl.volume = soundOn ? volume * SOUND_VOL.music : 0;
+  updateSetupMusicUI();
 }
 document.getElementById("soundBtn").onclick = () => {
   markInteracted();
   soundOn = !soundOn;
   try { localStorage.setItem("hd_sound", soundOn ? "1" : "0"); } catch (e) {}
   applySoundUI();
+  if (soundOn) playSetupMusic();
 };
 document.getElementById("volumeSlider").oninput = e => {
   markInteracted();
@@ -746,49 +889,74 @@ applySoundUI();
 
 /* ================= setup screen ================= */
 function renderChips(){
-  const mk = (sel, elId) => {
-    const el = document.getElementById(elId); el.innerHTML = "";
-    sel.forEach(s32 => {
-      const p = POOL.find(p => p.steam32 === s32); if (!p) return;
-      const c = document.createElement("div"); c.className = "chip";
-      c.innerHTML = "<b>" + esc(p.name) + "</b> " + p.mmr + " · P" + esc(p.role);
-      c.title = "Remove"; c.onclick = () => {
-        const i = sel.indexOf(s32); if (i >= 0) sel.splice(i, 1);
-        renderChips(); renderLists(); };
-      el.appendChild(c);
-    });
+  const medal = p => {
+    const tier = Number(p.rankTier);
+    if (!Number.isInteger(tier) || tier < 10 || tier > 80)
+      return '<span class="medal unknown" title="Medal unavailable" aria-label="Medal unavailable">—</span>';
+    const names = ["", "Herald", "Guardian", "Crusader", "Archon", "Legend", "Ancient", "Divine", "Immortal"];
+    const group = Math.floor(tier / 10), star = tier % 10;
+    if (!names[group] || (group < 8 && star > 5))
+      return '<span class="medal unknown" title="Medal unavailable" aria-label="Medal unavailable">—</span>';
+    const label = names[group] + (group < 8 && star ? " " + star : "");
+    const root = "https://www.opendota.com/assets/images/dota2/rank_icons/";
+    const icon = RANK_ICONS['rank_icon_' + group] || root + 'rank_icon_' + group + '.png';
+    const pip = RANK_ICONS['rank_star_' + star] || root + 'rank_star_' + star + '.png';
+    return '<span class="medal" title="' + esc(label) + '" aria-label="' + esc(label) + '">' +
+      '<img src="' + icon + '" alt="">' +
+      (group < 8 && star ? '<img src="' + pip + '" alt="">' : '') + '</span>';
   };
-  mk(mineSel, "mineChips"); mk(enemySel, "enemyChips");
-}
-function renderLists(){
-  const mk = (sel, other, q, elId) => {
-    const el = document.getElementById(elId); el.innerHTML = "";
-    const needle = q.trim().toLowerCase();
-    POOL.filter(p => !sel.includes(p.steam32) && !other.includes(p.steam32) &&
-                     (!needle || p.name.toLowerCase().includes(needle)))
-        .slice(0, needle ? 40 : 25)
-        .forEach(p => {
-          const r = document.createElement("div"); r.className = "prow";
-          r.innerHTML = "<span>" + esc(p.name) + "</span><span class=meta>" +
-                        p.mmr + " · P" + esc(p.role) + "</span>";
-          r.onclick = () => { if (sel.length >= 5) return;
-            sel.push(p.steam32); renderChips(); renderLists(); };
-          el.appendChild(r);
-        });
+  // Angular varsity lettering, drawn as a vector so every browser gets the same C.
+  const captainMark = '<span class="captainmark" title="Captain" role="img" aria-label="Captain">' +
+    '<svg viewBox="-1 -1 26 26" aria-hidden="true" focusable="false">' +
+    '<path d="M5 1H19L23 5V10H16V8H10V16H16V14H23V19L19 23H5L1 19V5Z" ' +
+    'fill="#D7B65A" stroke="#F4EBD2" stroke-width="1.25" stroke-linejoin="miter"/>' +
+    '</svg></span>';
+  const mk = (sel, key, elId) => {
+    const avatar = p => {
+      const initials = String(p.name || '?').trim().split(/\s+/).map(s => s[0] || '').join('').slice(0, 2).toUpperCase() || '?';
+      const url = String(p.avatar || '');
+      const img = /^https:\/\//i.test(url) ? '<img src="' + esc(url) + '" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">' : '';
+      return '<span class="rosteravatar" role="img" aria-label="' + esc(p.name) + ' Steam avatar">' + esc(initials) + img + '</span>';
+    };
+    const el = document.getElementById(elId), team = leagueByKey(key);
+    const players = sel.map(id => POOL.find(p => p.steam32 === id)).filter(Boolean);
+    const captain = team && players.find(p => p.steam32 === team.captainId ||
+      p.name.trim().toLowerCase() === String(team.captain || "").trim().toLowerCase());
+    const ordered = captain ? [captain, ...players.filter(p => p !== captain)] : players;
+    let markup = team ? '<div class="rostername">' + esc(team.name) + '</div>' : '';
+    if (team && team.captain && !captain)
+      markup += '<div class="rosterplayer captain"><span class="medal unknown" aria-hidden="true">—</span>' +
+        '<span>' + esc(team.captain) + '</span>' + captainMark + '</div>';
+    markup += ordered.map(p => {
+      const isCaptain = p === captain;
+      const steam64 = (BigInt(p.steam32) + 76561197960265728n).toString();
+      const url = 'https://steamcommunity.com/profiles/' + steam64;
+      const dotabuff = 'https://www.dotabuff.com/players/' + p.steam32;
+      return '<div class="rosterplayer' + (isCaptain ? ' captain' : '') + '">' +
+        '<a class="medallink" target="_blank" rel="noopener noreferrer" href="' + dotabuff +
+        '" title="Open ' + esc(p.name) + ' on Dotabuff">' + medal(p) + '</a>' +
+        avatar(p) +
+        '<a target="_blank" rel="noopener noreferrer" href="' + url +
+        '" title="Open ' + esc(p.name) + ' on Steam">' + esc(p.name) + '</a>' +
+        (isCaptain ? captainMark : '') + '</div>';
+    }).join('');
+    if (!ordered.length && !(team && team.captain))
+      markup += '<div class="rosterempty">Choose a team to see its roster.</div>';
+    el.innerHTML = markup;
   };
-  mk(mineSel, enemySel, document.getElementById("mineSearch").value, "mineList");
-  mk(enemySel, mineSel, document.getElementById("enemySearch").value, "enemyList");
+  mk(mineSel, mineKey, "mineChips");
+  mk(enemySel, enemyKey, "enemyChips");
 }
-function leagueByKey(key){ return (LEAGUE || []).find(t => t.key === key); }
+function leagueByKey(key){ return AVAILABLE_TEAMS.find(t => t.key === key); }
 function fillLeagueSelects(){
-  [["mineLeague","Your Team Scout team"],
-   ["enemyLeague","Opposition from Team Scout"]].forEach(([id, blank]) => {
+  [["mineLeague","Choose team"],
+   ["enemyLeague","Choose team"]].forEach(([id, blank]) => {
     const el = document.getElementById(id);
     el.innerHTML = '<option value="">' + esc(blank) + '</option>';
-    (LEAGUE || []).forEach(t => {
+    AVAILABLE_TEAMS.forEach(t => {
       const o = document.createElement("option");
       o.value = t.key;
-      o.textContent = t.short === t.name ? t.name : (t.short + " — " + t.name);
+      o.textContent = t.name;
       el.appendChild(o);
     });
   });
@@ -802,34 +970,52 @@ function applyLeague(side, key){
     enemyKey = t ? t.key : "";
     if (t){
       enemySel = t.roster.filter(id => !mineSel.includes(id)).slice(0, 5);
-      document.getElementById("enemyName").value = t.name;
-    }
+      enemyName = t.name;
+    } else enemyName = "Opposition";
   }
   document.getElementById(side === "mine" ? "mineLeague" : "enemyLeague").value = key || "";
-  renderChips(); renderLists();
+  renderChips();
 }
 document.getElementById("mineLeague").onchange = e => applyLeague("mine", e.target.value);
 document.getElementById("enemyLeague").onchange = e => applyLeague("enemy", e.target.value);
-document.getElementById("mineSearch").oninput = renderLists;
-document.getElementById("enemySearch").oninput = renderLists;
-function seg(id, set){
-  const el = document.getElementById(id);
-  el.querySelectorAll("button").forEach(b => b.onclick = () => {
-    el.querySelectorAll("button").forEach(x => x.classList.remove("on"));
-    b.classList.add("on"); set(b.dataset.v);
-  });
+let manualFirst = firstChoice, manualSide = sideChoice;
+function paintSetupChoices(){
+  for (const [id, value] of [["firstSeg", firstChoice], ["sideSeg", sideChoice]]){
+    document.getElementById(id).querySelectorAll("button").forEach(b => {
+      const selected = b.dataset.v === value;
+      b.classList.toggle("on", selected);
+      b.setAttribute("aria-pressed", String(selected));
+    });
+  }
+  const random = firstChoice === "random" && sideChoice === "random";
+  const button = document.getElementById("randomBoth");
+  button.classList.toggle("on", random);
+  button.setAttribute("aria-pressed", String(random));
 }
-seg("firstSeg", v => firstChoice = v);
-seg("sideSeg", v => sideChoice = v);
+document.querySelectorAll("#firstSeg button").forEach(b => b.onclick = () => {
+  manualFirst = b.dataset.v;
+  firstChoice = manualFirst; sideChoice = manualSide;
+  paintSetupChoices();
+});
+document.querySelectorAll("#sideSeg button").forEach(b => b.onclick = () => {
+  manualSide = b.dataset.v;
+  firstChoice = manualFirst; sideChoice = manualSide;
+  paintSetupChoices();
+});
+document.getElementById("randomBoth").onclick = () => {
+  firstChoice = "random"; sideChoice = "random";
+  paintSetupChoices();
+};
 
 document.getElementById("startBtn").onclick = async () => {
   markInteracted();
   const warn = document.getElementById("setupWarn");
+  if (launchRosterError){ warn.textContent = launchRosterError; return; }
   if (!mineSel.length || !enemySel.length){
     warn.textContent = "Both teams need at least one player."; return; }
   warn.textContent = "";
   let r = await post("/draft/teams", { mine: mineSel, enemy: enemySel,
-    enemy_name: document.getElementById("enemyName").value || "The Dire",
+    enemy_name: enemyName,
     mine_key: mineKey || null, enemy_key: enemyKey || null });
   if (!r.ok){ warn.textContent = r.msg || "Couldn't save teams."; return; }
   r = await post("/draft/start", { first: firstChoice, side: sideChoice });
@@ -852,7 +1038,7 @@ document.getElementById("newBtn").onclick = async () => {
    only, name on hover. Search dims non-matches rather than collapsing the
    grid — positions stay put, so the spatial memory the drill is building
    survives a search. */
-const GRID_COLS = { str: 6, agi: 6, int: 6, all: 4 };
+const GRID_COLS = { str: 5, agi: 5, int: 5, all: 4 };
 /* hints: off by default, remembered per browser (never required to draft) */
 let hintsOn = false;
 try { hintsOn = localStorage.getItem("hd_hints") === "1"; } catch (e) {}
@@ -914,7 +1100,7 @@ function buildGrid(){
     group.appendChild(head);
     const g = document.createElement("div"); g.className = "grid";
     g.style.gridTemplateColumns = "repeat(" + cols + ", var(--tile))";
-    g.style.gridTemplateRows = "repeat(" + maxRows + ", minmax(0,1fr))";
+    g.style.gridTemplateRows = "repeat(" + maxRows + ", auto)";
     sub.forEach(hid => g.appendChild(mkTile(hid)));
     group.appendChild(g);
     root.appendChild(group);
@@ -922,27 +1108,11 @@ function buildGrid(){
   sizeHeroGrid();
 }
 
-/* Measures the real, current layout (not a viewport-relative guess) to pick
-   a tile size that fills #heroGrid's available height with no per-row gap,
-   WITHOUT ever making a group wider than the panel (that would scroll the
-   Strength group off-screen, failing "all four attribute groups visible"):
-     rowBudget = (available height - attribute header - inter-row gaps) / rows
-     colBudget = (available width - inter-group/intra-group gaps) / total cols
-     tile      = min(colBudget, rowBudget / TILE_RATIO), clamped to [26, 84]
-   TILE_RATIO (2.3, matching .tile .im's max-height) is taller than a literal
-   Dota portrait's ~1.6 aspect: at this panel's actual width (a fixed-width
-   draft column takes ~23% of it), the hero grid is normally width-bound, so
-   raising the ratio lets the image use more of the height that a stricter
-   1.6 would otherwise leave as gap, at the cost of a slightly taller crop.
-   #heroGrid then gets that exact computed height (flex:0 0 auto, not
-   flex:1), so any leftover space collapses into ONE gap below the whole
-   grid instead of one gap under every row. Only when height is the binding
-   term does the fill-the-height goal fully land (zero leftover); when width
-   binds instead, a bigger bottom gap is the correct trade-off — it beats
-   hiding a whole attribute group behind a horizontal scrollbar. Re-run on
-   hints toggle and window resize since both change gridwrap's box. */
+/* Keep the picker width-bound, like the client. Rows use their natural
+   landscape-card height instead of stretching to fill the entire viewport;
+   that keeps portraits readable and balances the draft panel beside them. */
 let heroMaxRows = 6;
-let heroGroupCols = [6, 6, 6, 4];
+let heroGroupCols = [5, 5, 5, 4];
 let sizeHeroGridQueued = false;
 function sizeHeroGrid(){
   const wrap = document.querySelector(".gridwrap");
@@ -952,52 +1122,114 @@ function sizeHeroGrid(){
   if (!wrap || !gridtop || !heroGridEl || !head) return;
   const wrapRect = wrap.getBoundingClientRect();
   const wrapCS = getComputedStyle(wrap);
-  const padBottom = parseFloat(wrapCS.paddingBottom) || 0;
   const padLeft = parseFloat(wrapCS.paddingLeft) || 0;
   const padRight = parseFloat(wrapCS.paddingRight) || 0;
-  const topRect = gridtop.getBoundingClientRect();
-  const topMarginBottom = parseFloat(getComputedStyle(gridtop).marginBottom) || 0;
-  const headRect = head.getBoundingClientRect();
-  const headMarginBottom = parseFloat(getComputedStyle(head).marginBottom) || 0;
-  const availH = (wrapRect.bottom - padBottom) -
-                 (topRect.bottom + topMarginBottom) - (headRect.height + headMarginBottom);
   const availW = wrapRect.width - padLeft - padRight;
-  if (availH <= 0 || availW <= 0) return;
-
-  const rows = heroMaxRows;
-  const rowGapTotal = (rows - 1) * 3;
-  const rowBudget = (availH - rowGapTotal) / rows;
+  if (availW <= 0) return;
 
   const totalCols = heroGroupCols.reduce((a, b) => a + b, 0);
-  const totalColGapsWithin = heroGroupCols.reduce((a, c) => a + (c - 1) * 3, 0);
-  const totalInterGroupGaps = (heroGroupCols.length - 1) * 12;
+  const totalColGapsWithin = heroGroupCols.reduce((a, c) => a + (c - 1) * 4, 0);
+  const totalInterGroupGaps = (heroGroupCols.length - 1) * 16;
   const colBudget = (availW - totalInterGroupGaps - totalColGapsWithin) / totalCols;
 
-  const TILE_RATIO = 2.3;
-  const tile = Math.max(26, Math.min(84, Math.min(colBudget, rowBudget / TILE_RATIO)));
+  const tile = Math.max(34, Math.min(78, colBudget));
   document.documentElement.style.setProperty("--tile", tile.toFixed(2) + "px");
-  const gridHeight = Math.min(rows * (tile * TILE_RATIO) + rowGapTotal, availH);
-  heroGridEl.style.height = gridHeight.toFixed(2) + "px";
+  heroGridEl.style.height = "auto";
 }
 window.addEventListener("resize", () => {
   if (sizeHeroGridQueued) return;
   sizeHeroGridQueued = true;
   requestAnimationFrame(() => { sizeHeroGridQueued = false; sizeHeroGrid(); });
 });
+/* Selecting works on either team's turn, like the client: a hero lined up
+   while the AI is acting stays selected for ours. Only locking waits. */
 function selectHero(hid){
-  if (!ST || !ST.turn || !ST.turn.is_me) return;
+  if (!ST || !ST.turn) return;
   if (ST.taken.includes(hid)) return;
   selectedHid = (selectedHid === hid) ? null : hid;
+  searchPicked = false;  // a click or keypress on a tile beats the search's pick
   syncGrid();
 }
 async function lockIn(){
   if (selectedHid == null) return;
   const r = await post("/draft/act", { hid: selectedHid });
-  if (r.ok) { selectedHid = null; poll(); }
+  if (r.ok) { selectedHid = null; searchPicked = false; setHeroQuery(""); poll(); }
 }
 document.getElementById("lockBtn").onclick = lockIn;
-document.getElementById("heroSearch").oninput = e => {
-  heroQuery = e.target.value.trim().toLowerCase(); syncGrid(); };
+document.getElementById("randomHero").onclick = () => {
+  if (!ST || !ST.turn) return;
+  const available = Object.keys(HEROES).map(Number)
+    .filter(hid => !ST.taken.includes(hid));
+  if (!available.length) return;
+  setHeroQuery("");
+  selectedHid = available[Math.floor(Math.random() * available.length)];
+  searchPicked = false;
+  syncGrid();
+};
+
+/* Type-to-search, like the client: letters typed anywhere on the board go to
+   the hero search; matching is loose (punctuation and spaces ignored) and also
+   accepts initials ("qop", "kotl") plus a few nicknames initials can't make.
+   A search that leaves exactly one available hero selects it, so Enter locks. */
+const HERO_NICKS = {windranger: "wr", bristleback: "bb", earthshaker: "es",
+  shadowfiend: "sf", outworlddestroyer: "od", outworlddevourer: "od"};
+const squash = s => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+const heroKeys = {};
+function searchKeys(hid){
+  if (!heroKeys[hid]){
+    const name = hname(hid);
+    const words = name.toLowerCase().split(/[\s-]+/).filter(Boolean);
+    const keys = [squash(name)];
+    if (words.length > 1) keys.push(words.map(w => w[0]).join(""));
+    if (HERO_NICKS[squash(name)]) keys.push(HERO_NICKS[squash(name)]);
+    heroKeys[hid] = keys;
+  }
+  return heroKeys[hid];
+}
+function heroMatches(hid){
+  const q = squash(heroQuery);
+  if (!q) return true;
+  const keys = searchKeys(hid);
+  return keys[0].includes(q) || keys.slice(1).some(k => k.startsWith(q));
+}
+let searchPicked = false;  // true while the current selection came from typing
+function applySearchSelect(){
+  if (!ST || !ST.turn) return;
+  if (selectedHid != null && !searchPicked) return;  // keep a hand-picked hero
+  const taken = new Set(ST.taken);
+  const q = squash(heroQuery);
+  const hits = q ? Object.keys(HEROES).map(Number)
+    .filter(h => !taken.has(h) && heroMatches(h)) : [];
+  // An exact name, initials or nickname wins over names that merely contain
+  // the letters: "wr" is Windranger even though "wraithking" contains "wr".
+  const exact = hits.filter(h => searchKeys(h).includes(q));
+  const pick = exact.length === 1 ? exact[0] : (hits.length === 1 ? hits[0] : null);
+  if (pick != null){ selectedHid = pick; searchPicked = true; }
+  else if (searchPicked){ selectedHid = null; searchPicked = false; }
+}
+function setHeroQuery(value){
+  const box = document.getElementById("heroSearch");
+  if (box.value !== value) box.value = value;
+  heroQuery = value.trim().toLowerCase();
+  applySearchSelect(); syncGrid();
+}
+document.getElementById("heroSearch").oninput = e => setHeroQuery(e.target.value);
+document.addEventListener("keydown", e => {
+  const board = document.getElementById("board");
+  if (!board || !board.classList.contains("on")) return;
+  if (document.getElementById("overlay").classList.contains("on")) return;
+  const box = document.getElementById("heroSearch");
+  const tag = (e.target.tagName || "").toLowerCase();
+  const typing = tag === "input" || tag === "textarea" || tag === "select";
+  if (e.key === "Escape" && (heroQuery || document.activeElement === box)){
+    e.preventDefault(); setHeroQuery(""); box.blur(); return;
+  }
+  if (typing || e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1) return;
+  if (e.key === " " && !heroQuery) return;  // Space on a focused tile selects it
+  e.preventDefault();
+  box.focus();
+  setHeroQuery(box.value + e.key);
+});
 /* Enter locks the selection in — the clock doesn't wait for the mouse. */
 document.addEventListener("keydown", e => {
   if (e.key !== "Enter") return;
@@ -1015,7 +1247,7 @@ function syncGrid(){
     t.classList.toggle("taken", taken.has(hid));
     t.classList.toggle("sel", selectedHid === hid);
     t.classList.toggle("sugg", hintsOn && suggs.has(hid) && !taken.has(hid));
-    t.classList.toggle("dim", !!heroQuery && !hname(hid).toLowerCase().includes(heroQuery));
+    t.classList.toggle("dim", !!heroQuery && !heroMatches(hid));
     const rb = document.getElementById("rb" + hid);
     const mtag = ST && ST.meta_tags ? ST.meta_tags[hid] : null;
     const tier = mtag ? mtag.tier : "";
@@ -1073,12 +1305,19 @@ function renderActionBox(){
       btn.textContent = "Select a hero";
     }
   } else {
-    selIm.innerHTML = '<div class="ph">?</div>';
-    selName.textContent = "No hero selected";
-    selReason.textContent = (ST.enemy_name || "Opponent") + " is " +
+    const acting = (ST.enemy_name || "Opponent") + " is " +
       (t.type === "ban" ? "banning" : "picking");
+    if (selectedHid != null){
+      selIm.innerHTML = img(selectedHid);
+      selName.textContent = hname(selectedHid);
+      selReason.textContent = "Preselected · " + acting;
+    } else {
+      selIm.innerHTML = '<div class="ph">?</div>';
+      selName.textContent = "No hero selected";
+      selReason.textContent = acting;
+    }
     btn.disabled = true;
-    btn.textContent = verb + " hero";
+    btn.textContent = "Wait for your turn";
   }
 }
 
@@ -1377,8 +1616,7 @@ function renderCreators(){
 function renderSubLine(){
   const el = document.getElementById("subLine");
   if (!el || !ST) return;
-  const patch = ST.meta_patch ? "Patch " + ST.meta_patch + " meta · " : "";
-  el.textContent = patch + "Captains Mode · " + (ST.label || "");
+  el.textContent = ST.meta_patch ? "Patch " + ST.meta_patch : "Patch";
 }
 
 function renderSummary(){
@@ -1419,11 +1657,13 @@ let boardWasVisible = false;
 
 async function poll(){
   try {
-    const r = await fetch("/draft/state");
+    const r = await fetch(draftApi("/draft/state"));
     ST = await r.json();
     ST._recvAt = Date.now();
   } catch (e) { return; }
   const drafting = ST.phase === "drafting" || ST.phase === "done";
+  document.getElementById("randomHero").disabled = !ST.turn ||
+    Object.keys(HEROES).length <= (ST.taken || []).length;
   document.getElementById("setup").classList.toggle("on", !drafting);
   document.getElementById("board").classList.toggle("on", drafting);
   document.body.classList.toggle("drafting", drafting);
@@ -1436,21 +1676,24 @@ async function poll(){
     requestAnimationFrame(sizeHeroGrid);
   }
   if (ST.phase === "setup"){
+    let rosterChanged = false;
     if (!mineSel.length && ST.my_roster.length) { mineSel = ST.my_roster.slice();
-      renderChips(); renderLists(); }
+      rosterChanged = true; }
     if (!enemySel.length && ST.enemy_roster.length) { enemySel = ST.enemy_roster.slice();
-      renderChips(); renderLists(); }
+      rosterChanged = true; }
     if (!mineKey && ST.mine_key){
       mineKey = ST.mine_key;
       document.getElementById("mineLeague").value = mineKey;
+      rosterChanged = true;
     }
     if (!enemyKey && ST.enemy_key){
       enemyKey = ST.enemy_key;
       document.getElementById("enemyLeague").value = enemyKey;
+      rosterChanged = true;
     }
-    const en = document.getElementById("enemyName");
-    if (!en.value && ST.enemy_name && ST.enemy_name !== "The Dire")
-      en.value = ST.enemy_name;
+    if (!enemyKey && ST.enemy_name && ST.enemy_name !== "The Dire")
+      enemyName = ST.enemy_name;
+    if (rosterChanged) renderChips();
   }
   // sound: a ban/pick lock on new history entries, music + phase transitions
   if (drafting){
@@ -1467,6 +1710,8 @@ async function poll(){
     lastHistoryLen = null;
   }
   if (ST.phase === "drafting" && lastPhase !== "drafting"){
+    setupMusicEl.pause();
+    updateSetupMusicUI();
     playSound("draft_start");
     startMusic();
   }
@@ -1474,10 +1719,17 @@ async function poll(){
     stopMusicFade();
     if (!anyRealSounds()) synthDraftComplete();  // client itself has no such line
   }
-  if (ST.phase === "setup" && lastPhase && lastPhase !== "setup") stopMusicFade();
+  if (ST.phase === "setup" && lastPhase !== "setup"){
+    if (lastPhase) stopMusicFade();
+    playSetupMusic();
+  }
   lastPhase = ST.phase;
   if (drafting){
-    if (ST.turn && !ST.turn.is_me) selectedHid = null;
+    // A preselected hero survives the AI's turn unless the AI takes it.
+    if (selectedHid != null && ST.taken.includes(selectedHid)){
+      selectedHid = null; searchPicked = false;
+    }
+    applySearchSelect();
     renderTeamCards(); renderMeter(); renderDraftPanel();
     renderTurn(); renderSuggs(); renderScout(); renderCreators();
     syncGrid(); renderSummary();
@@ -1493,22 +1745,27 @@ setInterval(poll, 500);
 function applyLaunchParams(){
   let q;
   try { q = new URLSearchParams(location.search); } catch (e) { return; }
-  const ids = v => (v || "").split(",").map(x => parseInt(x, 10))
-    .filter(n => Number.isFinite(n) && POOL.some(p => p.steam32 === n)).slice(0, 5);
+  const ids = v => (v || "").split(",").map(x => Number(x))
+    .filter(n => Number.isSafeInteger(n) && n > 0).slice(0, 5);
   const mk = q.get("mine"), ek = q.get("enemy");
   if (mk && leagueByKey(mk)) applyLeague("mine", mk);
   if (ek && leagueByKey(ek)) applyLeague("enemy", ek);
   const mi = ids(q.get("mine_ids")), ei = ids(q.get("enemy_ids"));
+  const known = new Set(POOL.map(p => p.steam32));
+  if ([...mi, ...ei].some(id => !known.has(id))){
+    launchRosterError = "A Team Scout player is unavailable in the draft pool. Return to Team Scout and relaunch Mock Draft.";
+    document.getElementById("setupWarn").textContent = launchRosterError;
+  }
   if (mi.length){ mineSel = mi.filter(id => !ei.includes(id)); }
   if (ei.length){ enemySel = ei.filter(id => !mineSel.includes(id)); }
   const en = q.get("enemy_name");
-  if (en) document.getElementById("enemyName").value = en.slice(0, 40);
-  renderChips(); renderLists();
+  if (en && !enemyKey) enemyName = en.slice(0, 40);
+  renderChips();
   if (location.pathname.replace(/\/+$/, "") === "/draft"){
     document.getElementById("backRow").style.display = "block";
   }
 }
-buildGrid(); applyHintsUI(); fillLeagueSelects(); renderLists(); probeRealSounds();
+buildGrid(); applyHintsUI(); fillLeagueSelects(); probeRealSounds(); loadSetupTracks();
 applyLaunchParams(); poll();
 </script>
 </body>
@@ -1517,13 +1774,17 @@ applyLaunchParams(); poll();
 
 
 def render_page(pool, heroes, label, league_teams=None):
+    from .report_html import _rank_icon_uris
+
     heroes_json = json.dumps({str(k): v for k, v in heroes.items()}).replace(
         "</", "<\\/"
     )
     pool_json = json.dumps(pool).replace("</", "<\\/")
     league_json = json.dumps(league_teams or []).replace("</", "<\\/")
+    rank_icons_json = json.dumps(_rank_icon_uris(offline=True))
     return (PAGE
             .replace("__HEROES__", heroes_json)
             .replace("__POOL__", pool_json)
             .replace("__LEAGUE__", league_json)
+            .replace("__RANK_ICONS__", rank_icons_json)
             .replace("__LABEL__", html.escape(str(label or "LD2L"))))

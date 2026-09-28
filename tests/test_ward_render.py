@@ -3,9 +3,19 @@ import io
 from PIL import Image
 
 from scout.ward_render import (
-    GAP, HEADER_H, LABEL_H, LEGEND_H, PAD, SHEET_MAP_SIZE,
+    CURRENT_MAP_WORLD_BOUNDS, GAP, HEADER_H, LABEL_H, LEGEND_H,
+    LANE_TOWER_WORLD, MID_PANEL_SIZE,
+    MID_SUPERSAMPLE,
+    MID_WINDOW_CX, MID_WINDOW_CY, MID_WINDOW_HALF, PAD, SHEET_MAP_SIZE,
+    SIDE_LANE_WINDOWS, _game_world_to_grid, _lane_crop_box, _map_asset_path,
+    _map_world_bounds,
+    _mid_to_src,
+    _zoom_to_panel,
     cluster_mid_spots, cluster_wards, in_mid_window, mid_ward_events,
-    player_side_wards, render_mid_ward, render_ward_sheet, select_map_players,
+    player_side_wards, render_mid_ward, render_player_lane_ward_rows,
+    render_player_ward_rows,
+    render_side_lane_ward, side_lane_ward_events,
+    render_ward_sheet, select_map_players,
     ward_patch_id, world_to_px,
 )
 
@@ -83,6 +93,17 @@ def build_payload():
     return payload, team
 
 
+def test_heatmap_player_rows_keep_full_size_and_use_distinct_filenames():
+    payload, team = build_payload()
+    individual = render_player_ward_rows(payload, team)
+    heatmaps = render_player_ward_rows(payload, team, heatmap=True)
+    assert len(individual) == len(heatmaps)
+    assert heatmaps[0][0] == "ward-heatmap-player-1.png"
+    assert heatmaps[0][1] != individual[0][1]
+    image = Image.open(io.BytesIO(heatmaps[0][1]))
+    assert image.size == (SHEET_MAP_SIZE * 2 + GAP, SHEET_MAP_SIZE)
+
+
 def test_ward_patch_id_finds_named_patch():
     payload, _team = build_payload()
     assert ward_patch_id(payload) == 60
@@ -144,6 +165,18 @@ def test_render_ward_sheet_handles_no_selected_players():
     row_h = LABEL_H + SHEET_MAP_SIZE + GAP
     expected_height = top + 1 * row_h + LEGEND_H + PAD  # n_rows floors at 1
     assert img.height == expected_height
+
+
+def test_player_ward_rows_include_every_roster_player_as_two_maps():
+    payload, team = build_payload()
+    rows = render_player_ward_rows(payload, team)
+    assert len(rows) == len(team["roster"]) == 5
+    assert [row[0] for row in rows] == [f"ward-player-{n}.png" for n in range(1, 6)]
+    assert ["CarryA", "CarryB", "Support4", "OffLane", "MidPlayer"] == [
+        row[2].split(":")[0] for row in rows]
+    for _filename, data, _description in rows:
+        image = Image.open(io.BytesIO(data))
+        assert image.size == (SHEET_MAP_SIZE * 2 + GAP, SHEET_MAP_SIZE)
 
 
 # --------------------------------------------------------------------------
@@ -260,6 +293,161 @@ def test_render_mid_ward_returns_valid_png_and_summary():
     assert png_bytes[:8] == b"\x89PNG\r\n\x1a\n"
     img = Image.open(io.BytesIO(png_bytes))
     assert img.format == "PNG"
+    assert img.size == (MID_PANEL_SIZE * 2 + 24, MID_PANEL_SIZE)
     assert set(summary.keys()) == {"radiant", "dire"}
     assert summary["radiant"]["games"] == 1
     assert summary["dire"]["games"] == 0
+
+
+def test_side_lane_wards_use_first_observer_and_all_sentries_before_330():
+    payload = _mid_payload({
+        "Offlane": [_mid_row(1, 3, True, "Offlane", "Axe",
+                             obs=[[95, 160, 209], [96, 160, 210]],
+                             sen=[[95, 161, -20], [96, 161, 209], [96, 162, 210]])],
+        "Support": [_mid_row(1, 4, True, "Support", "Hoodwink",
+                             obs=[[95, 160, -10], [95, 160], [126, 127, -30]])],
+    })
+    games, wards = side_lane_ward_events(payload, payload["teams"][0], "top")
+    assert games["radiant"] == {1}
+    assert [w["t"] for w in wards["radiant"] if w["kind"] == "obs"] == [-10]
+    assert [w["t"] for w in wards["radiant"] if w["kind"] == "sen"] == [-20, 209]
+    assert wards["dire"] == []
+
+
+def test_side_lane_crops_are_distinct_and_render_at_mid_zoom_size():
+    payload = _mid_payload({
+        "Carry": [_mid_row(1, 1, True, "Carry", "Drow Ranger",
+                           obs=[[160, 95, 100], [95, 160, 100]])],
+    })
+    team = payload["teams"][0]
+    _games, bottom = side_lane_ward_events(payload, team, "bottom")
+    assert [(w["x"], w["y"]) for w in bottom["radiant"]] == [(160.0, 95.0)]
+    png_bytes, summary = render_side_lane_ward(payload, team, "bottom")
+    assert png_bytes[:8] == b"\x89PNG\r\n\x1a\n"
+    assert Image.open(io.BytesIO(png_bytes)).size == (MID_PANEL_SIZE * 2 + 24, MID_PANEL_SIZE)
+    assert summary["radiant"]["withObserver"] == 1
+    assert summary["dire"]["withObserver"] == 0
+
+
+def test_tower_landmarks_match_the_game_map_entity_origins():
+    # The installed map's minimap_boundary entities span -9472..9472.
+    # These are the pixel positions of its six Tier 1 origins on a 400px map.
+    expected = {
+        "mid": ((167, 230), (211, 186)),
+        "top": ((66, 161), (89, 73)),
+        "bottom": ((303, 335), (332, 247)),
+    }
+    assert CURRENT_MAP_WORLD_BOUNDS == (-9472, 9472)
+    for lane, towers in LANE_TOWER_WORLD.items():
+        for (world_x, world_y, _label), pixel in zip(towers, expected[lane]):
+            grid_x, grid_y = _game_world_to_grid(world_x, world_y)
+            assert tuple(round(value) for value in _mid_to_src(
+                grid_x, grid_y, (400, 400), CURRENT_MAP_WORLD_BOUNDS)) == pixel
+
+
+def test_tower_projection_uses_the_exact_rounded_image_crop():
+    # A tower and the background must use the same integer crop bounds.
+    # The old continuous-window transform displaced the overlay after crop.
+    for source_size, bounds in (((900, 900), (-8192, 8192)),
+                                ((400, 400), CURRENT_MAP_WORLD_BOUNDS)):
+        for lane, (cx, cy, half) in (("mid", (MID_WINDOW_CX, MID_WINDOW_CY, MID_WINDOW_HALF)),
+                                    *SIDE_LANE_WINDOWS.items()):
+            left, top, right, bottom = _lane_crop_box(cx, cy, half, source_size, bounds)
+            for world_x, world_y, _label in LANE_TOWER_WORLD[lane]:
+                grid_x, grid_y = _game_world_to_grid(world_x, world_y)
+                source_x, source_y = _mid_to_src(grid_x, grid_y, source_size, bounds)
+                panel_x, panel_y = _zoom_to_panel(grid_x, grid_y, cx, cy, half,
+                                                  source_size, bounds)
+                scale = MID_PANEL_SIZE * MID_SUPERSAMPLE
+                assert abs(left + panel_x / scale * (right - left) - source_x) < 1e-9
+                assert abs(top + panel_y / scale * (bottom - top) - source_y) < 1e-9
+
+
+def test_tower_landmarks_are_visible_in_both_panels_of_every_lane():
+    payload = _mid_payload({"Mid": [_mid_row(1, 2, True, "Mid", "Hero")]})
+    team = payload["teams"][0]
+    map_path = _map_asset_path()
+    source_size = Image.open(map_path).size
+    bounds = _map_world_bounds(map_path)
+    for lane in ("mid", "top", "bottom"):
+        png, _summary = (render_mid_ward(payload, team) if lane == "mid"
+                         else render_side_lane_ward(payload, team, lane))
+        image = Image.open(io.BytesIO(png)).convert("RGB")
+        cx, cy, half = ((MID_WINDOW_CX, MID_WINDOW_CY, MID_WINDOW_HALF)
+                        if lane == "mid" else SIDE_LANE_WINDOWS[lane])
+        for world_x, world_y, label in LANE_TOWER_WORLD[lane]:
+            x, y = _game_world_to_grid(world_x, world_y)
+            px, py = _zoom_to_panel(x, y, cx, cy, half, source_size, bounds)
+            for offset in (0, MID_PANEL_SIZE + 24):
+                center = (round(px / 2) + offset, round(py / 2))
+                red, green, _blue = image.getpixel((center[0] + 17, center[1]))
+                assert (green > red * 1.3) if label.startswith("R") else (red > green * 1.3)
+                assert min(image.getpixel(center)) > 220  # white tower silhouette
+
+
+def _ward_gold_pixels(image, x, y):
+    # Match the observer marker itself, not similarly colored map terrain.
+    return sum(
+        sum(abs(channel - expected) for channel, expected in
+            zip(image.getpixel((xx, yy)), (223, 182, 93))) < 30
+        for xx in range(x - 12, x + 13)
+        for yy in range(y - 12, y + 13)
+    )
+
+
+def test_lane_sheets_are_per_player_with_radiant_and_dire_columns():
+    payload = _mid_payload({
+        "Radiant Player": [_mid_row(1, 4, True, "Radiant Player", "Hero",
+                                   obs=[[95, 160, 100]])],
+        "Dire Player": [_mid_row(2, 5, False, "Dire Player", "Hero",
+                                obs=[[110, 150, 100]])],
+    })
+    rows = render_player_lane_ward_rows(payload, payload["teams"][0])
+    assert [name for name, _png, _description in rows] == [
+        "lane-pos-4.png", "lane-pos-5.png"]
+    first = Image.open(io.BytesIO(rows[0][1])).convert("RGB")
+    second = Image.open(io.BytesIO(rows[1][1])).convert("RGB")
+    assert first.size == second.size == (MID_PANEL_SIZE * 2 + 24, 652)
+    # Each role's lane pair appears at full width, with no three-lane stack.
+    lane_y = 52
+    assert _ward_gold_pixels(first, 300, lane_y + 300) > 50
+    assert _ward_gold_pixels(second, 300, lane_y + 300) < 10
+    dire_x = MID_PANEL_SIZE + 24 + 467
+    assert _ward_gold_pixels(second, dire_x, lane_y + 411) > 50
+    assert _ward_gold_pixels(first, dire_x, lane_y + 411) < 10
+
+
+def test_support_lane_pairs_follow_each_sides_lane():
+    payload = _mid_payload({
+        "Pos 4": [
+            _mid_row(1, 4, True, "Pos 4", "Hero", obs=[[95, 160, 100]]),
+            _mid_row(2, 4, False, "Pos 4", "Hero", obs=[[160, 95, 100]]),
+        ],
+        "Pos 5": [
+            _mid_row(1, 5, True, "Pos 5", "Hero", obs=[[160, 95, 100]]),
+            _mid_row(2, 5, False, "Pos 5", "Hero", obs=[[95, 160, 100]]),
+        ],
+    })
+    rows = render_player_lane_ward_rows(payload, payload["teams"][0])
+    for _name, png, description in rows:
+        image = Image.open(io.BytesIO(png)).convert("RGB")
+        assert image.size == (MID_PANEL_SIZE * 2 + 24, 652)
+        for x in (300, MID_PANEL_SIZE + 24 + 300):
+            assert _ward_gold_pixels(image, x, 52 + 300) > 50
+        assert ("Offlane" if "Pos 4" in description else "Safe lane") in description
+
+
+def test_lane_sheets_select_mid_and_supports_without_mareth():
+    payload = _mid_payload({
+        "Carry": [_mid_row(1, 1, True, "Carry", "Hero")],
+        "Mid": [_mid_row(1, 2, True, "Mid", "Hero")],
+        "Offlane": [_mid_row(1, 3, True, "Offlane", "Hero")],
+        "Mareth": [_mid_row(1, 4, True, "Mareth", "Hero")],
+        "Support 4": [_mid_row(1, 4, True, "Support 4", "Hero")],
+        "Support 5": [_mid_row(1, 5, True, "Support 5", "Hero")],
+    })
+    rows = render_player_lane_ward_rows(payload, payload["teams"][0])
+    assert [name for name, _png, _description in rows] == [
+        "lane-pos-2.png", "lane-pos-4.png", "lane-pos-5.png"]
+    assert [description.split(":")[0] for _name, _png, description in rows] == [
+        "Mid (Pos 2)", "Support 4 (Pos 4)", "Support 5 (Pos 5)"]

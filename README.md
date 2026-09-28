@@ -75,6 +75,17 @@ show the complete Pos 1-5 distribution and win rate at each inferred position;
 the match logs show the position, confidence, and underlying evidence for each
 game. Signup preference remains visible as a separate claim.
 
+**Roles and flex** separates exact five-player lineups from stand-in games and
+incomplete lineups. Repeated flex requires a regular player to have at least two
+usable official games in each of two roles with the full roster present. Single
+changes stay labelled isolated; stand-in changes compare with an established
+full-roster role and identify the substitute, absent regular and match. Low
+confidence, hero-only guesses and conflicting teammate positions stay visible
+but do not establish flex. The summary shows sample sizes and usable role
+coverage, and does not infer stability from missing data. Former-player games
+are separate from current-roster conclusions. Shared heroes are labelled
+separately because sharing a hero alone does not show positional flex.
+
 **Best Heroes** is success-ranked rather than volume-ranked. A beta-binomial
 style evidence score shrinks small-sample win rates toward 50%, preventing a
 single 1-0 hero from outranking a sustained record. Record, raw win rate,
@@ -101,6 +112,8 @@ when it clears a shrunk win-rate bar (small samples count less), isn't already
 one of their five most-played "comfort" heroes, isn't stale (unplayed in over
 a year), and has at most one official appearance so far - roughly, "heroes
 they're quietly good at but nobody's drafted for them yet."
+The player Overview and Heroes tab also compare their win rate when they picked
+melee versus ranged heroes, with separate recent-pub and lifetime records.
 
 The new **Esports** tab is Team Scout's answer to a Dotabuff esports profile,
 covering every ticketed league a player has queued into, amateur leagues
@@ -147,18 +160,47 @@ Manual `python ld2l_scout.py --teamscout` still opens a browser; the always-on t
 
 ## Scout Bot
 
-Scout Bot is a Discord bot that posts the Briefing and Wards pages (the same
-Components V2 pages Team Scout renders) into the team's `#test` channel. It
+Scout Bot is a Discord bot that posts Briefing, Wards, and Recon pages (the same
+Components V2 pages Team Scout renders) into the team's `#scouting` channel. It
 reads BBC's feed and official-match cache read-only, and only shells out to
 `python -m scout.briefing_cli` (never an in-process import) to build a
 briefing snapshot.
 
+The Briefing tab keeps a League ranks profile, up to three key
+reads, draft habits, and compact player summaries (role, rank, KDA, GPM and
+official sample size). Team metrics such as GPM show their place among teams
+with usable official data in the same league. Team Scout shows the same
+rankings on each team page; #1 means the highest value, including deaths.
+The player **Heroes** line lists every hero from that player's
+official games with the scouted team, as an icon with its win-loss record.
+If an icon is unavailable, the name remains as a fallback. Players with no
+official games show that explicitly; pub heroes are not substituted.
+Run `/scoutingreport` in `#scouting` to post the current Team Anony: Fun Police
+prototype, or supply `team` (and optionally `vs`) to scout another team.
+`/briefing` remains available for team-specific reports. Posting a new report
+in `#scouting` removes earlier Scout Bot briefings there,
+leaving the newest scout message.
+
+The Wards page shows one horizontal Radiant/Dire lane image each for Mid,
+position 4, and position 5, followed by full-map ward heatmaps for the two
+supports. Heatmap is the default Game Wards view; the Heatmap and Individual
+Wards buttons switch between density and exact placement maps. Each image
+opens on its own; a short note appears above the maps only when ward data
+is unavailable. On a machine with Dota 2 installed, the bot extracts the
+current minimap from the local game files and caches it for map rendering.
+If that map is unavailable, it uses OpenDota's 7.40 map background.
+
 ```powershell
-python scout_bot.py                                    # gateway: slash commands (/week, /standings, /matchups, /roster, /recent, /briefing)
+python scout_bot.py                                    # gateway: slash commands (/week, /standings, /matchups, /roster, /recent, /briefing, /scoutingreport)
 python scout_bot.py --post-briefing "Team Name" --vs "Other Team"   # one-shot post
-python scout_bot.py --post-briefing "Team Name" --dry-run           # print both pages instead of posting
+python scout_bot.py --post-briefing "Team Name" --dry-run           # print all three pages instead of posting
 python scout_bot.py --sync-hero-emojis                              # (re)sync OpenDota hero art as Discord application emojis
+python scout_bot.py --sync-medal-emojis                             # (re)sync Dota medal badges for player names in Discord
 ```
+
+Medal syncing uses the bot token and application ID from `.env`. Once synced,
+`/roster`, Briefing, and Recon show the shield and stars beside each player.
+Without synced emojis, the medal name remains visible as text.
 
 It runs always-on via the `Scout Bot` Windows Scheduled Task, installed with:
 
@@ -168,6 +210,9 @@ powershell -ExecutionPolicy Bypass -File services\install_scout_bot_task.ps1
 
 Secrets (`SCOUT_BOT_TOKEN`, `SCOUT_BOT_APPLICATION_ID`, `SCOUT_BOT_GUILD_ID`,
 `SCOUT_BOT_CHANNEL_ID`) live in the git-ignored `.env` at the repo root.
+An optional RD2L server can be added with `SCOUT_BOT_EXTRA_GUILD_ID` and
+`SCOUT_BOT_EXTRA_CHANNEL_ID`. Commands are restricted to that channel, and
+`/scoutingreport` requires the `team` option there.
 
 ## Sharing it with the team
 
@@ -423,14 +468,21 @@ face, at `http://localhost:8323/` standalone or at Team Scout's `/draft`, on a
 board **laid out like the Dota client** — your picks stack down one side,
 theirs down the other, ban strips and the phase timer across the top, and the
 hero pool in the four attribute columns (Strength / Agility / Intelligence /
-Universal, alphabetical, portraits only) in the exact in-game arrangement. Build
-your roster and the enemy roster from the cached signup pool **or pick the
-same teams Team Scout is using** (persisted to `herodraft_teams.json`), name
-the opposition, choose first pick and side — or coin-flip both. The draft
-order is the current Captains Mode sequence (introduced in 7.34, unchanged
+Universal, alphabetical, portraits only) in the exact in-game arrangement.
+Choose both teams in setup, or launch Mock Draft from the main Team Scout to
+use its current lineups, including stand-ins. Draft rosters are saved to
+`herodraft_teams.json`. Then choose first or second pick and Radiant or Dire
+(first pick and Radiant are selected by default). The draft order is the
+current Captains Mode sequence (introduced in 7.34, unchanged
 through **7.41f**): first-pick bans 3-2-2 / second-pick 4-1-2, picks 1-3-1,
 with the real clocks: 15s first ban phase, 30s everything else, 130s reserve
 each, timed-out ban = no ban, timed-out pick = random hero.
+
+Put `.mp3`, `.ogg`, `.wav`, or `.webm` songs in the top-level `Music/` folder
+for the Mock Draft setup screen. It shuffles the songs, plays each once before
+reshuffling, and picks up new files when the next song starts. Use the setup
+screen's play button if your browser waits for a click before allowing audio.
+The setup song pauses when the draft starts; draft sounds keep their own music.
 
 **What the bot drafts from** (all of it also feeds the hints on your turn):
 

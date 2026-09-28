@@ -36,7 +36,10 @@ from .league_history import (
 from .opendota import OpenDota
 from .overrides import load_overrides, save_overrides
 from .ld2l import load_schedule, refresh_schedule_if_new_week
-from .rd2l_source import load_rd2l, load_rd2l_matches, refresh_rd2l_if_new_week
+from .rd2l_source import (
+    load_rd2l, load_rd2l_matches, rd2l_source_stamp,
+    refresh_rd2l_if_new_week,
+)
 from .team_scout_html import render_page
 
 MAX_REQUEST_BODY = 16 * 1024  # bytes
@@ -384,7 +387,13 @@ def build_player_record(player, sections, hero_map, patches, deep, official=None
         "role": str(player.get("pref_role") or "Any"),
         "rank": rank_tier_to_str(profile.get("rank_tier")),
         "rankTier": profile.get("rank_tier"),
-        "private": bool(inner.get("fh_unavailable")) or not (wins + losses or matches),
+        "avatar": inner.get("avatarfull") or inner.get("avatarmedium"),
+        # OpenDota's explicit flag is the only reliable indication that a
+        # player chose to hide their match history.  In particular, RD2L
+        # roster records are intentionally built from league data first and
+        # may not have a cached pub sample yet; treating that absence as a
+        # private profile makes an entire newly-seen team look private.
+        "private": bool(inner.get("fh_unavailable")),
         "lifetime": {"games": wins + losses, "wins": wins},
         "heroes": heroes,
         "matches": matches,
@@ -406,6 +415,13 @@ def build_player_record(player, sections, hero_map, patches, deep, official=None
         },
         "lastMatch": matches[0]["at"] if matches else 0,
     }
+
+
+def _cached_avatar(cache, steam32):
+    """Use an already-fetched OpenDota profile for roster-only players."""
+    profile = (cache.get_section(steam32, "profile", None) or {}) if cache else {}
+    inner = profile.get("profile") or {}
+    return inner.get("avatarfull") or inner.get("avatarmedium")
 
 
 def _int_ids(values):
@@ -723,7 +739,10 @@ def _rd2l_record(player, hero_map, patches, official=None, cache=None, meta=None
             "name": player.get("name") or str(player["id"]),
             "mmr": 0,
         },
-        {"profile": {"rank_tier": rank, "profile": {"personaname": player.get("name") or ""}}},
+        {"profile": {"rank_tier": rank, "profile": {
+            "personaname": player.get("name") or "",
+            "avatarfull": _cached_avatar(cache, int(player["id"])),
+        }}},
         hero_map,
         patches,
         [],
@@ -953,6 +972,16 @@ def auto_refresh_cycle(season, bbc_root=None, overrides_path=None):
     if targets is None:
         return None
     cache, od, ids, bbc_match_ids, rd2l_matches = targets
+    # The service runs its page rebuilds offline, but the auto-refresh pass is
+    # the online opportunity to fill RD2L's team-page match list.  Without
+    # this, newly listed games remain absent forever because league-history
+    # refresh only indexes payloads it is handed; the next offline rebuild
+    # then shows an incomplete team record.
+    rd2l = load_rd2l()
+    if rd2l:
+        rd2l_matches = load_rd2l_matches(
+            rd2l, fetcher=od.match, offline=False,
+        )
     started = time.time()
     refreshed = sum(1 for sid in ids if refresh_pub_sections(od, cache, sid))
     pub_calls = od.calls
@@ -1068,7 +1097,8 @@ def build_payload(season, offline=False, bbc_root=None, overrides_path=None):
         records.append(build_player_record(
             {"steam32": steam32, "name": player["name"], "mmr": 0,
              "pref_role": "Unknown"},
-            {"profile": {"rank_tier": player.get("rank_tier")}},
+            {"profile": {"rank_tier": player.get("rank_tier"),
+                         "profile": {"avatarfull": _cached_avatar(cache, steam32)}}},
             hero_map, patches, [], bbc["official"].get(steam32),
             cache=cache, meta=meta,
         ))
@@ -1083,7 +1113,9 @@ def build_payload(season, offline=False, bbc_root=None, overrides_path=None):
         records.append(build_player_record(
             {"steam32": steam32, "name": name or f"Player {steam32}", "mmr": 0,
              "pref_role": "Unknown"},
-            {}, hero_map, patches, [], rows,
+            {"profile": {"profile": {
+                "avatarfull": _cached_avatar(cache, steam32),
+            }}}, hero_map, patches, [], rows,
             cache=cache, meta=meta,
         ))
         indexed.add(steam32)
@@ -1390,6 +1422,27 @@ class TeamScoutState:
         threading.Thread(
             target=self._watch_bbc, args=(interval,), daemon=True
         ).start()
+
+    def watch_rd2l_results(self, interval=5, quiet_seconds=10):
+        """Rebuild after RD2L match downloads, even during a long refresh."""
+        threading.Thread(
+            target=self._watch_rd2l_results,
+            args=(interval, quiet_seconds), daemon=True,
+        ).start()
+
+    def _watch_rd2l_results(self, interval, quiet_seconds):
+        stamp = rd2l_source_stamp()
+        changed_at = None
+        while True:
+            time.sleep(interval)
+            next_stamp = rd2l_source_stamp()
+            if next_stamp != stamp:
+                stamp = next_stamp
+                changed_at = time.monotonic()
+            elif changed_at is not None and time.monotonic() - changed_at >= quiet_seconds:
+                changed_at = None
+                print("  ↻ RD2L results changed — rebuilding Team Scout", flush=True)
+                self._safe_build()
 
     def _watch_bbc(self, interval):
         stamp = bbc_source_stamp()
@@ -1952,11 +2005,14 @@ def _log_auth_failure(path, forwarded_for):
     )
 
 
-def _draft_key(account):
-    """One practice draft per sign-in; the shared password shares one board."""
+def _draft_key(account, league=None):
+    """Keep a sign-in's LD2L and RD2L practice boards separate."""
     if not isinstance(account, dict):
-        return "shared"
-    return str(account.get("user") or "shared")
+        user = "shared"
+    else:
+        user = str(account.get("user") or "shared")
+    league = str(league or "").lower()
+    return f"{user}:{league}" if league in ("ld2l", "rd2l") else user
 
 
 def _make_handler(state, password_or_accounts, draft_hub=None):
@@ -1972,7 +2028,8 @@ def _make_handler(state, password_or_accounts, draft_hub=None):
                 return False
             if not (path.startswith("/draft") or path.startswith("/sounds/")):
                 return False
-            hit = draft_hub.route_get(path, _draft_key(self.account), head=head)
+            league = parse_qs(urlsplit(self.path).query).get("league", [""])[0]
+            hit = draft_hub.route_get(path, _draft_key(self.account, league), head=head)
             if hit is None:
                 self.send_error(404)
                 return True
@@ -2106,7 +2163,9 @@ def _make_handler(state, password_or_accounts, draft_hub=None):
             elif path == "/api/roster":
                 self._handle_roster(body)
             elif draft_hub is not None and path.startswith("/draft/"):
-                hit = draft_hub.route_post(path, body, _draft_key(self.account))
+                league = parse_qs(urlsplit(self.path).query).get("league", [""])[0]
+                hit = draft_hub.route_post(path, body,
+                                           _draft_key(self.account, league))
                 if hit is None:
                     self.send_error(404)
                 else:
@@ -2235,6 +2294,7 @@ def run_team_scout(season, port=None, offline=False, open_browser=True,
         raise SystemExit(1) from error
     draft_hub.load_async()
     state.watch_bbc()
+    state.watch_rd2l_results()
     state.watch_schedules()
     if auto_refresh:
         state.auto_refresh()

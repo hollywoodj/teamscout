@@ -34,10 +34,12 @@ import math
 import os
 import random
 import re
+import tempfile
 import threading
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import unquote
 
 from . import config
 from .analysis import is_organized_match
@@ -47,6 +49,8 @@ from .fetch import fetch_player_sections, players_from_snapshot
 from .hero_positions import POS_WEIGHTS, affinity
 from .heroes import HERO_FALLBACK
 from .opendota import OpenDota
+
+_ROSTERS_LOCK = threading.RLock()
 
 # --------------------------------------------------------------------------
 # Captains Mode sequence — patch 7.40 (verified vs Liquipedia, 2025-12-15).
@@ -444,16 +448,23 @@ def scout_why(book, hid, kind, pick_index, is_first_pick_team):
     return ""
 
 
+def _steam_avatar(profile):
+    inner = profile.get("profile") or {}
+    return inner.get("avatarfull") or inner.get("avatarmedium")
+
+
 def load_league_context(od, cache, profiles, rows, offline=True):
     """BBC teams + official draft books, same source as Team Scout.
 
-    Players on posted/override rosters who aren't in the signup snapshot are
-    appended to `rows` / `profiles` so the picker can seat them.
+    Players on posted/override rosters, available standins, and pulled Team
+    Scout players who aren't in the signup snapshot are appended to `rows` /
+    `profiles` so a roster swap in Team Scout reaches the draft.
     """
-    from .bbc_source import load_bbc_data
+    from .bbc_source import index_official_matches, load_bbc_data, team_key
     from .heroes import load_hero_map
     from .overrides import load_overrides
-    from .team_scout import assemble_team
+    from .rd2l_source import load_rd2l, load_rd2l_matches
+    from .team_scout import _all_pulled_players, assemble_team
 
     hero_map = load_hero_map(od, cache, offline=offline)
     bbc = load_bbc_data(hero_map)
@@ -465,9 +476,23 @@ def load_league_context(od, cache, profiles, rows, offline=True):
             continue
         overrides["rosters"].update(bucket.get("rosters") or {})
         overrides["replaced"].update(bucket.get("replaced") or {})
+    pulled_players = _all_pulled_players(overrides)
     id_to_name = {p["steam32"]: p["name"] for p in rows}
+    for row in rows:
+        if not row.get("rankTier"):
+            row["rankTier"] = ((bbc.get("players") or {}).get(row["steam32"]) or {}).get("rank_tier")
     for sid, info in (bbc.get("players") or {}).items():
         id_to_name.setdefault(sid, info.get("name") or f"Player {sid}")
+    pulled_ids = []
+    for raw_sid, info in pulled_players.items():
+        try:
+            sid = int(raw_sid)
+        except (TypeError, ValueError):
+            continue
+        if sid <= 0:
+            continue
+        id_to_name.setdefault(sid, str((info or {}).get("name") or f"Player {sid}"))
+        pulled_ids.append(sid)
     teams, books = [], {}
     extra_ids = []
     for team in bbc.get("teams") or []:
@@ -477,12 +502,19 @@ def load_league_context(od, cache, profiles, rows, offline=True):
         roster = list(assembled.get("roster") or [])[:5]
         teams.append({
             "key": key,
+            "league": "ld2l",
             "name": assembled.get("name") or key,
             "short": assembled.get("short") or assembled.get("name") or key,
+            "captain": assembled.get("captain") or "",
+            "captainId": next((sid for sid in roster
+                               if id_to_name.get(sid, "").strip().casefold()
+                               == str(assembled.get("captain") or "").strip().casefold()), None),
             "roster": roster,
         })
         books[key] = build_draft_book(bbc.get("teamMatches") or [], key)
         extra_ids.extend(roster)
+        extra_ids.extend(row["id"] for row in assembled.get("replacements") or [])
+    extra_ids.extend(pulled_ids)
     known = {p["steam32"] for p in rows}
     for sid in extra_ids:
         if sid in known:
@@ -496,25 +528,90 @@ def load_league_context(od, cache, profiles, rows, offline=True):
         }
         sections, _ = fetch_player_sections(od, cache, player, offline=True)
         profiles[sid] = build_profile(player, sections)
+        profile = sections.get("profile") or {}
+        avatar = _steam_avatar(profile)
         rows.append({"steam32": sid, "name": player["name"],
-                     "mmr": 0, "role": "Any"})
+                     "mmr": 0, "role": "Any",
+                     "rankTier": profile.get("rank_tier") or info.get("rank_tier"),
+                     "avatar": avatar})
         known.add(sid)
-    # Each player's own official hero record - the strongest comfort signal.
-    for sid, matches in (bbc.get("official") or {}).items():
-        prof = profiles.get(sid)
-        if not prof:
-            continue
-        recs = {}
-        for row in matches or []:
-            try:
-                hid = int(row.get("hero_id"))
-            except (TypeError, ValueError):
+    rd2l = load_rd2l(offline=True)
+    rd2l_official = {}
+    if rd2l:
+        used = {team["key"] for team in teams}
+        rd_teams = []
+        rd_players = {int(p["id"]): p for p in rd2l.get("players") or []
+                      if p.get("id") is not None}
+        for raw in rd2l.get("teams") or []:
+            name = raw.get("name") or ""
+            key = raw.get("key") or team_key(name)
+            if not name or not key:
                 continue
-            rec = recs.setdefault(hid, _stat())
-            rec["g"] += 1
-            rec["w"] += 1 if row.get("result") == "W" else 0
-        prof["official"] = recs
-        prof.pop("_aff", None)
+            if key in used:
+                key = f"{key}-{str(raw.get('id') or 'x')[:6].lower()}"
+            used.add(key)
+            roster = [int(sid) for sid in raw.get("roster") or []][:5]
+            captain = raw.get("captain") or ""
+            rd_teams.append({
+                "key": key, "league": "rd2l", "name": name,
+                "short": raw.get("short") or name, "captain": captain,
+                "captainId": next((sid for sid in roster
+                                   if str((rd_players.get(sid) or {}).get("name") or "").strip().casefold()
+                                   == captain.strip().casefold()), None),
+                "roster": roster,
+            })
+        if rd_teams:
+            for sid, info in rd_players.items():
+                if sid in known:
+                    continue
+                name = info.get("name") or f"Player {sid}"
+                player = {"steam32": sid, "name": name, "mmr": 0, "pref_role": "Any"}
+                sections, _ = fetch_player_sections(od, cache, player, offline=True)
+                profiles[sid] = build_profile(player, sections)
+                profile = sections.get("profile") or {}
+                avatar = _steam_avatar(profile)
+                rows.append({"steam32": sid, "name": name, "mmr": 0,
+                             "role": "Any", "rankTier": info.get("rankTier")
+                             or profile.get("rank_tier"), "avatar": avatar})
+                known.add(sid)
+            raw_matches = load_rd2l_matches(rd2l, offline=True)
+            name_to_id = {team_key(p.get("name")): sid for sid, p in rd_players.items()}
+            rd2l_official, team_matches, _ = index_official_matches(
+                raw_matches, rd_teams, hero_map, rd2l.get("league") or "RD2L",
+                name_to_id,
+            )
+            rd_keys = {team_key(t["name"]): t["key"] for t in rd_teams}
+            for match in team_matches:
+                for side in ("radiant", "dire"):
+                    row = match.get(side) or {}
+                    row["team_key"] = rd_keys.get(row.get("team_key"), row.get("team_key"))
+            for matches in rd2l_official.values():
+                for row in matches:
+                    row["team_key"] = rd_keys.get(row.get("team_key"), row.get("team_key"))
+            teams.extend(rd_teams)
+            for team in rd_teams:
+                books[team["key"]] = build_draft_book(team_matches, team["key"])
+
+    # Keep official comfort tied to its league for players who play in both.
+    for league_id, official in (("ld2l", bbc.get("official") or {}),
+                                ("rd2l", rd2l_official)):
+        for sid, matches in official.items():
+            prof = profiles.get(sid)
+            if not prof:
+                continue
+            recs = {}
+            for row in matches or []:
+                try:
+                    hid = int(row.get("hero_id"))
+                except (TypeError, ValueError):
+                    continue
+                rec = recs.setdefault(hid, _stat())
+                rec["g"] += 1
+                rec["w"] += 1 if row.get("result") == "W" else 0
+            prof.setdefault("official_by_league", {})[league_id] = recs
+            if league_id == "ld2l" or not prof.get("official"):
+                prof["official"] = recs
+            prof.pop("_aff", None)
     rows.sort(key=lambda r: -r["mmr"])
     teams.sort(key=lambda t: t["name"].casefold())
     return {"teams": teams, "books": books}
@@ -811,9 +908,15 @@ def load_pool(season, offline=True):
         sections, _ = fetch_player_sections(od, cache, p, offline=True)
         profiles[p["steam32"]] = build_profile(p, sections)
     heroes = load_full_heroes(od, cache, offline=offline)
-    rows = [{"steam32": p["steam32"], "name": p["name"],
-             "mmr": p.get("mmr") or 0, "role": p.get("pref_role") or "Any"}
-            for p in players]
+    rows = []
+    for p in players:
+        profile = cache.get_section(p["steam32"], "profile", None) or {}
+        avatar = _steam_avatar(profile)
+        rows.append({"steam32": p["steam32"], "name": p["name"],
+                     "mmr": p.get("mmr") or 0,
+                     "role": p.get("pref_role") or "Any",
+                     "rankTier": profile.get("rank_tier") or p.get("rank_tier"),
+                     "avatar": avatar})
     rows.sort(key=lambda r: -r["mmr"])
     try:
         league = load_league_context(od, cache, profiles, rows, offline=offline)
@@ -831,7 +934,7 @@ class DraftState:
     """One practice draft. team index: 0 = first pick, 1 = second pick."""
 
     def __init__(self, season, label, pool, profiles, heroes, meta=None,
-                 league=None):
+                 league=None, storage_key="local"):
         self._lock = threading.RLock()
         self.season = season
         self.label = label
@@ -844,6 +947,7 @@ class DraftState:
         league = league or {}
         self.league_teams = league.get("teams") or []
         self.books = league.get("books") or {}
+        self.storage_key = str(storage_key or "local")
         self.events = []
         self.rng = random.Random()
 
@@ -862,8 +966,18 @@ class DraftState:
     # ---- persistence ----
     def _load_saved_rosters(self):
         try:
-            with open(config.HERODRAFT_TEAMS_FILE, encoding="utf-8") as f:
-                saved = json.load(f)
+            with _ROSTERS_LOCK:
+                with open(config.HERODRAFT_TEAMS_FILE, encoding="utf-8") as f:
+                    data = json.load(f)
+            if not isinstance(data, dict):
+                return
+            # The old single saved draft belongs only to standalone practice.
+            # Team Scout sign-ins must never inherit another league's lineup.
+            saved = (data.get("states") or {}).get(self.storage_key, {}) \
+                if isinstance(data.get("states"), dict) else \
+                (data if self.storage_key == "local" else {})
+            if not isinstance(saved, dict):
+                return
             known = {p["steam32"] for p in self.pool}
             self.my_roster = [int(s) for s in saved.get("mine", []) if int(s) in known][:5]
             self.enemy_roster = [int(s) for s in saved.get("enemy", []) if int(s) in known][:5]
@@ -873,16 +987,42 @@ class DraftState:
             enemy_key = saved.get("enemy_key")
             self.my_team_key = mine_key if mine_key in keys else None
             self.enemy_team_key = enemy_key if enemy_key in keys else None
+            if self.enemy_team_key:
+                self.enemy_name = next(t["name"] for t in self.league_teams
+                                       if t["key"] == self.enemy_team_key)[:40]
         except (OSError, ValueError, TypeError):
             pass
 
     def _save_rosters(self):
         try:
-            with open(config.HERODRAFT_TEAMS_FILE, "w", encoding="utf-8") as f:
-                json.dump({"mine": self.my_roster, "enemy": self.enemy_roster,
-                           "enemy_name": self.enemy_name,
-                           "mine_key": self.my_team_key,
-                           "enemy_key": self.enemy_team_key}, f, indent=2)
+            with _ROSTERS_LOCK:
+                try:
+                    with open(config.HERODRAFT_TEAMS_FILE, encoding="utf-8") as f:
+                        data = json.load(f)
+                except (OSError, ValueError, TypeError):
+                    data = {}
+                if not isinstance(data, dict):
+                    data = {}
+                states = data.get("states")
+                if not isinstance(states, dict):
+                    states = {"local": data} if data else {}
+                states[self.storage_key] = {
+                    "mine": self.my_roster, "enemy": self.enemy_roster,
+                    "enemy_name": self.enemy_name,
+                    "mine_key": self.my_team_key,
+                    "enemy_key": self.enemy_team_key,
+                }
+                path = os.path.abspath(config.HERODRAFT_TEAMS_FILE)
+                directory = os.path.dirname(path)
+                os.makedirs(directory, exist_ok=True)
+                fd, tmp = tempfile.mkstemp(dir=directory, prefix="herodraft_", suffix=".tmp")
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        json.dump({"states": states}, f, indent=2)
+                    os.replace(tmp, path)
+                finally:
+                    if os.path.exists(tmp):
+                        os.remove(tmp)
         except OSError as e:
             print(f"  ⚠ couldn't save rosters: {e}")
 
@@ -945,13 +1085,13 @@ class DraftState:
             self.enemy_roster = enemy
             self.my_team_key = self._valid_team_key(mine_key)
             self.enemy_team_key = self._valid_team_key(enemy_key)
-            if enemy_name:
-                self.enemy_name = str(enemy_name)[:40]
-            elif self.enemy_team_key:
+            if self.enemy_team_key:
                 for team in self.league_teams:
                     if team["key"] == self.enemy_team_key:
                         self.enemy_name = team["name"][:40]
                         break
+            else:
+                self.enemy_name = str(enemy_name or "Opposition")[:40]
         self._save_rosters()
         return True, "ok"
 
@@ -973,10 +1113,10 @@ class DraftState:
             else:
                 self.my_side = side if side in ("radiant", "dire") else "radiant"
             # threat tables: what each team would draft / fears
-            mine = [self.profiles[s] for s in self.my_roster if s in self.profiles]
-            enemy = [self.profiles[s] for s in self.enemy_roster if s in self.profiles]
-            now = time.time()
             my_ti, en_ti = (0, 1) if self.me_first else (1, 0)
+            mine = self._roster_profiles(my_ti)
+            enemy = self._roster_profiles(en_ti)
+            now = time.time()
             self.threats = [None, None]
             self.threats[my_ti] = team_threats(mine, now)     # what team F/S=me plays
             self.threats[en_ti] = team_threats(enemy, now)
@@ -1032,7 +1172,17 @@ class DraftState:
 
     def _roster_profiles(self, ti):
         s32s = self.my_roster if ti == self.my_team_index() else self.enemy_roster
-        return [self.profiles[s] for s in s32s if s in self.profiles]
+        key = self._key_for(ti)
+        team = next((t for t in self.league_teams if t["key"] == key), None)
+        league = str((team or {}).get("league") or "").lower()
+        result = []
+        for sid in s32s:
+            if sid not in self.profiles:
+                continue
+            prof = self.profiles[sid]
+            official = prof.get("official_by_league", {}).get(league, {})
+            result.append({**prof, "official": official} if league else prof)
+        return result
 
     def _key_for(self, ti):
         return self.my_team_key if ti == self.my_team_index() else self.enemy_team_key
@@ -1432,6 +1582,7 @@ SOUND_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 SOUND_EXTS = {".mp3": "audio/mpeg", ".ogg": "audio/ogg",
               ".wav": "audio/wav", ".webm": "audio/webm"}
 SOUNDS_DIR = os.path.join(os.path.dirname(__file__), "assets", "sounds")
+MUSIC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Music"))
 
 
 def _resolve_sound_path(filename):
@@ -1455,6 +1606,31 @@ def _resolve_sound_path(filename):
     return path, SOUND_EXTS[ext]
 
 
+def _music_files():
+    """Supported tracks in the user's Music folder, read on each request."""
+    try:
+        root = os.path.realpath(MUSIC_DIR)
+        files = []
+        for name in os.listdir(MUSIC_DIR):
+            path = os.path.join(MUSIC_DIR, name)
+            if (os.path.splitext(name)[1].lower() in SOUND_EXTS
+                    and os.path.isfile(path)
+                    and os.path.commonpath([os.path.realpath(path), root]) == root):
+                files.append(name)
+        return sorted(files)
+    except (OSError, ValueError):
+        return []
+
+
+def _resolve_music_path(encoded_name):
+    name = unquote(encoded_name)
+    if not name or name in (".", "..") or "/" in name or "\\" in name:
+        return None
+    if name not in _music_files():
+        return None
+    return os.path.join(MUSIC_DIR, name), SOUND_EXTS[os.path.splitext(name)[1].lower()]
+
+
 def _file_stamp(path):
     try:
         info = os.stat(path)
@@ -1467,7 +1643,9 @@ def _league_stamp():
     """Identity of the Team Scout inputs the league context is built from."""
     from .bbc_source import bbc_source_stamp
     from .overrides import overrides_path
-    return (bbc_source_stamp(), _file_stamp(overrides_path()))
+    from .rd2l_source import rd2l_source_stamp
+    return (bbc_source_stamp(), _file_stamp(overrides_path()),
+            rd2l_source_stamp())
 
 
 def _meta_stamp():
@@ -1627,7 +1805,8 @@ class HeroDraftHub:
                     for k in idle[:len(self.states) - config.HERODRAFT_MAX_STATES + 1]:
                         del self.states[k]
                 state = DraftState(self.season, self.label, self.pool, self.profiles,
-                                   self.heroes, self.meta, self.league)
+                                   self.heroes, self.meta, self.league,
+                                   storage_key=key)
                 self.states[key] = state
             return state
 
@@ -1674,6 +1853,17 @@ class HeroDraftHub:
                     {"phase": "loading", "error": self.error}).encode()
             return 200, "application/json", json.dumps(
                 self.state_for(key).snapshot()).encode()
+        if path == "/draft/music":
+            return 200, "application/json", json.dumps(_music_files()).encode("utf-8")
+        if path.startswith("/draft/music/"):
+            resolved = _resolve_music_path(path[len("/draft/music/"):])
+            if not resolved:
+                return 404, "text/plain", b"" if head else b"not found"
+            music_path, ctype = resolved
+            if head:
+                return 200, ctype, b""
+            with open(music_path, "rb") as f:
+                return 200, ctype, f.read()
         if path.startswith("/sounds/"):
             resolved = _resolve_sound_path(path[len("/sounds/"):])
             if not resolved:
@@ -1751,7 +1941,8 @@ def _make_handler(hub):
 
         def do_HEAD(self):
             path = self.path.split("?")[0]
-            hit = hub.route_get(path, head=True) if path.startswith("/sounds/") else None
+            hit = hub.route_get(path, head=True) if (
+                path.startswith("/sounds/") or path.startswith("/draft/music/")) else None
             if hit is None:
                 self._send(404, "text/plain", b"")
                 return
