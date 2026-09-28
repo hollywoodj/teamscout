@@ -1,6 +1,10 @@
 requests
 openpyxl
 Pillow
+# Reads the installed Dota map's entity lumps for the ward maps (Python < 3.14;
+# 3.14+ ships compression.zstd). Optional: without it the maps use built-in
+# tower / rune / boundary values.
+zstandard
 # For scout_bot.py (the Discord bot)
 discord.py==2.7.1
 python-dotenv

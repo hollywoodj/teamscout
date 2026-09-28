@@ -30,7 +30,7 @@ from pathlib import Path
 from .bbc_source import team_key as _team_key
 from .briefing import _find_team, build_briefing_page, build_recon_page, build_wards_page
 from .team_scout import build_payload
-from .ward_render import render_player_lane_ward_rows
+from .ward_render import map_info, render_player_lane_ward_rows
 
 
 def _load_json_map(path):
@@ -136,6 +136,7 @@ def main(argv=None):
         "vsKey": vs_key_value,
         "generatedAt": generated_at,
         "id": _snapshot_id(team_key_value, vs_key_value, generated_at),
+        "map": map_info(),
     }
     with (out_dir / "meta.json").open("w", encoding="utf-8") as handle:
         json.dump(meta, handle)

@@ -659,6 +659,15 @@ def _finish_snapshot(tmp_dir, stdout, returncode, stderr):
     if not text:
         raise RuntimeError("scout.briefing_cli produced no output")
     meta = json.loads(text.splitlines()[-1])
+    map_used = meta.get("map") or {}
+    if map_used:
+        note = ("Ward maps: %s background, %s landmarks (%s towers, %s runes)",
+                map_used.get("background"), map_used.get("landmarks"),
+                map_used.get("towers"), map_used.get("runes"))
+        if map_used.get("background") == "dota" and map_used.get("landmarks") == "dota":
+            log.info(*note)
+        else:
+            log.warning(*note)
     dest = SNAPSHOT_ROOT / meta["id"]
     SNAPSHOT_ROOT.mkdir(parents=True, exist_ok=True)
     if dest.exists():

@@ -2,8 +2,11 @@
 
 Mirrors the ward-map placement logic in scout/team_scout_html.py (clustering,
 patch selection, world->pct mapping, dot sizing). When Dota is installed,
-Discord uses its current minimap so 7.41 tower and ward overlays sit on the
-matching terrain; OpenDota's 7.40 image is the fallback background.
+Discord uses its current minimap texture as the background and projects
+wards, towers and rune spots with the map's own dota_minimap_boundary,
+tower and rune-spawner origins (scout/dota_map_entities.py), so every
+overlay sits exactly where the game draws it. OpenDota's 7.40 image, with
+OpenDota's 64..192 ward-cell projection, is the fallback background.
 """
 
 from __future__ import annotations
@@ -12,6 +15,7 @@ import io
 import math
 import os
 import struct
+import sys
 from pathlib import Path
 
 from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageFont
@@ -21,11 +25,17 @@ from .bbc_source import team_key as _team_key
 MAP_ASSET_PATH = Path(__file__).resolve().parent.parent / "cache" / "assets" / "detailed_740.jpg"
 MAP_ASSET_URL = "https://www.opendota.com/assets/images/dota2/map/detailed_740.jpg"
 CURRENT_MAP_ASSET_PATH = MAP_ASSET_PATH.parent.parent / "dota_current_minimap.png"
-# The installed map's two dota_minimap_boundary entities are at
-# (-9472, -9472) and (9472, 9472). Keep the fallback image's existing
-# ward-grid projection when the current minimap is unavailable.
-CURRENT_MAP_WORLD_BOUNDS = (-9472, 9472)
-OPENDOTA_MAP_WORLD_BOUNDS = (-8192, 8192)
+MAP_LANDMARKS_PATH = MAP_ASSET_PATH.parent.parent / "dota_map_landmarks.json"
+# World extent of a map image in game units: (min_x, min_y, max_x, max_y).
+# The installed minimap is projected with the map's own dota_minimap_boundary
+# corners, read from maps/dota.vpk by scout/dota_map_entities.py, so these
+# constants only apply while that read is unavailable. OpenDota's image
+# follows OpenDota's 64..192 ward-cell convention (-8192..8192), and the
+# in-game texture is drawn to that same extent: the Tier 1 tower origins
+# land on the lane art at these bounds, while wider bounds put them in the
+# trees and away from the squares the in-game minimap draws.
+CURRENT_MAP_WORLD_BOUNDS = (-8192, -8192, 8192, 8192)
+OPENDOTA_MAP_WORLD_BOUNDS = (-8192, -8192, 8192, 8192)
 
 WARD_PATCH_NAME = "7.41"
 WARD_PATCH_FALLBACK_ID = 60
@@ -98,18 +108,82 @@ def cluster_wards(points, bin=5):
     return out
 
 
+def bounds_rect(world_bounds):
+    """Normalise (low, high) or (min_x, min_y, max_x, max_y) bounds."""
+    if len(world_bounds) == 2:
+        low, high = world_bounds
+        return float(low), float(low), float(high), float(high)
+    min_x, min_y, max_x, max_y = world_bounds
+    return float(min_x), float(min_y), float(max_x), float(max_y)
+
+
+def grid_to_world(x, y):
+    """OpenDota ward grid (cell 128 = world origin, 128 units per cell) to
+    game world units. OpenDota's parser reports cell + offset / 128, so the
+    grid value is the ward's exact position, not a whole cell."""
+    return (x - 128) * 128, (y - 128) * 128
+
+
 def world_to_px(x, y, size, world_bounds=OPENDOTA_MAP_WORLD_BOUNDS):
     """Project OpenDota ward-grid coordinates onto the selected map image."""
-    low, high = world_bounds
-    world_x, world_y = (x - 128) * 128, (y - 128) * 128
-    left = (world_x - low) / (high - low)
-    top = (high - world_y) / (high - low)
+    min_x, min_y, max_x, max_y = bounds_rect(world_bounds)
+    world_x, world_y = grid_to_world(x, y)
+    left = (world_x - min_x) / (max_x - min_x)
+    top = (max_y - world_y) / (max_y - min_y)
     return left * size, top * size
 
 
+_LANDMARKS = {"loaded": False, "value": None}
+_WARNED = set()
+
+
+def _warn_once(key, message):
+    if key not in _WARNED:
+        _WARNED.add(key)
+        print(message, file=sys.stderr)
+
+
+def map_landmarks():
+    """Landmarks read from the installed Dota map (see dota_map_entities):
+    {"bounds": [min_x, min_y, max_x, max_y], "towers": [...], "runes": [...]}
+    or None when no install can be read. Cached for the process."""
+    if not _LANDMARKS["loaded"]:
+        _LANDMARKS["loaded"] = True
+        try:
+            from .dota_map_asset import _steam_game_dirs
+            from .dota_map_entities import ensure_map_landmarks
+
+            _LANDMARKS["value"] = ensure_map_landmarks(MAP_LANDMARKS_PATH, _steam_game_dirs())
+        except (OSError, ValueError, struct.error) as exc:
+            _warn_once("landmarks", f"Ward maps: could not read the Dota map's entities ({exc}); "
+                                    "towers, rune spots and the minimap extent use built-in values.")
+            _LANDMARKS["value"] = None
+    return _LANDMARKS["value"]
+
+
+def map_info():
+    """Describe the background and landmarks the ward maps will use, for
+    the snapshot's meta.json and for diagnostics."""
+    path = _map_asset_path()
+    current = Path(path) == CURRENT_MAP_ASSET_PATH
+    landmarks = map_landmarks() if current else None
+    return {
+        "background": "dota" if current else "opendota",
+        "path": str(path),
+        "bounds": list(bounds_rect(_map_world_bounds(path))),
+        "landmarks": "dota" if landmarks and landmarks.get("bounds") else "builtin",
+        "towers": len((landmarks or {}).get("towers") or []),
+        "runes": len((landmarks or {}).get("runes") or []),
+    }
+
+
 def _map_world_bounds(path):
-    return (CURRENT_MAP_WORLD_BOUNDS if Path(path) == CURRENT_MAP_ASSET_PATH
-            else OPENDOTA_MAP_WORLD_BOUNDS)
+    if Path(path) == CURRENT_MAP_ASSET_PATH:
+        bounds = (map_landmarks() or {}).get("bounds")
+        if bounds and len(bounds) == 4:
+            return tuple(float(v) for v in bounds)
+        return CURRENT_MAP_WORLD_BOUNDS
+    return OPENDOTA_MAP_WORLD_BOUNDS
 
 
 def _dot_px(kind, n):
@@ -223,8 +297,10 @@ def _map_asset_path():
         current = ensure_current_minimap(CURRENT_MAP_ASSET_PATH)
         if current is not None:
             return current
-    except (OSError, ValueError, struct.error):
-        pass
+        _warn_once("minimap", "Ward maps: no Dota install found; using OpenDota's 7.40 map image.")
+    except (OSError, ValueError, struct.error) as exc:
+        _warn_once("minimap", f"Ward maps: Dota's minimap could not be read ({exc}); "
+                              "using OpenDota's 7.40 map image.")
     if not MAP_ASSET_PATH.exists():
         os.makedirs(MAP_ASSET_PATH.parent, exist_ok=True)
         import urllib.request
@@ -459,9 +535,10 @@ def render_player_ward_rows(payload, team, heatmap=False):
 # negative = pre-horn; missing when the source entry had no time).
 
 # The window is a grid-unit square centred between the two runes flanking mid
-# lane. RUNE spots below are approximate - eyeballed off the map image, not
-# read from OpenDota data - and only used to draw the rune markers.
-MID_RUNE_SPOTS = [(115.2, 136.3), (137.2, 118.7)]  # approximate rune spots
+# lane. The rune markers come from the installed map's power-rune spawners
+# (water runes spawn on those spots); MID_RUNE_SPOTS is the approximate,
+# eyeballed fallback used when the map cannot be read.
+MID_RUNE_SPOTS = [(115.2, 136.3), (137.2, 118.7)]  # approximate fallback
 MID_WINDOW_CX, MID_WINDOW_CY, MID_WINDOW_HALF = 126.2, 127.5, 17
 MID_WARD_CUTOFF = 60
 MID_CLUSTER_RADIUS = 2.0
@@ -472,10 +549,10 @@ SIDE_LANE_WINDOWS = {
     "top": (95, 160, 27),
     "bottom": (160, 95, 27),
 }
-# Tier 1 entity origins from the installed Dota map's
-# maps/dota/entities/default_ents.vents_c (mapunitname + origin). Keep game
-# world units here so the landmarks use the same projection as ward points.
-# These are reference markers, not match-specific alive/destroyed state.
+# Fallback Tier 1 origins (game world units) for when the installed map's
+# entity lumps cannot be read; lane_towers() prefers the live npc_dota_tower
+# origins. These are reference markers, not match-specific alive/destroyed
+# state.
 LANE_TOWER_WORLD = {
     "mid": ((-1543.998535, -1407.998413, "R T1"),
             (523.999756, 651.999817, "D T1")),
@@ -509,6 +586,32 @@ def _game_world_to_grid(x, y):
     is cell 128. Keep this conversion shared by every tower landmark.
     """
     return 128 + x / 128, 128 + y / 128
+
+
+def lane_towers(lane):
+    """(world_x, world_y, label) for every tower the installed map has on
+    `lane` (all tiers; the crop decides which are visible), else the
+    built-in Tier 1 fallback."""
+    landmarks = map_landmarks() or {}
+    towers = [t for t in landmarks.get("towers") or [] if t.get("lane") == lane]
+    if towers:
+        return tuple((float(t["x"]), float(t["y"]),
+                      f"{'R' if t.get('side') == 'radiant' else 'D'} T{t.get('tier')}")
+                     for t in towers)
+    return LANE_TOWER_WORLD[lane]
+
+
+def mid_rune_spots():
+    """Grid-unit (x, y) of the two river rune spots flanking mid: the map's
+    water/power rune spawners when readable, else MID_RUNE_SPOTS."""
+    landmarks = map_landmarks() or {}
+    runes = landmarks.get("runes") or []
+    for kind in ("water", "powerup"):
+        spots = [r for r in runes if r.get("kind") == kind]
+        if len(spots) >= 2:
+            spots.sort(key=lambda r: math.hypot(float(r["x"]), float(r["y"])))
+            return [_game_world_to_grid(float(r["x"]), float(r["y"])) for r in spots[:2]]
+    return list(MID_RUNE_SPOTS)
 
 
 def _lane_crop_box(cx, cy, half, source_size=(MID_SRC_SIZE, MID_SRC_SIZE),
@@ -782,7 +885,7 @@ def render_mid_ward(payload, team, cutoff=MID_WARD_CUTOFF):
     games, wards, _mid_names = mid_ward_events(payload, team, cutoff=cutoff)
     return _render_zoomed_lane(games, wards, MID_WINDOW_CX, MID_WINDOW_CY,
                                MID_WINDOW_HALF, "Mid ward", cutoff,
-                               MID_RUNE_SPOTS, LANE_TOWER_WORLD["mid"])
+                               mid_rune_spots(), lane_towers("mid"))
 
 
 def render_side_lane_ward(payload, team, lane, cutoff=SIDE_LANE_CUTOFF):
@@ -791,7 +894,7 @@ def render_side_lane_ward(payload, team, lane, cutoff=SIDE_LANE_CUTOFF):
     cx, cy, half = SIDE_LANE_WINDOWS[lane]
     return _render_zoomed_lane(games, wards, cx, cy, half,
                                f"{lane.title()} lane", cutoff,
-                               towers=LANE_TOWER_WORLD[lane])
+                               towers=lane_towers(lane))
 
 
 def render_player_lane_ward_rows(payload, team):

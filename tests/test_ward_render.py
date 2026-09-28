@@ -2,16 +2,19 @@ import io
 
 from PIL import Image
 
+import scout.ward_render as ward_render
 from scout.ward_render import (
-    CURRENT_MAP_WORLD_BOUNDS, GAP, HEADER_H, LABEL_H, LEGEND_H,
-    LANE_TOWER_WORLD, MID_PANEL_SIZE,
+    CURRENT_MAP_ASSET_PATH, CURRENT_MAP_WORLD_BOUNDS, GAP, HEADER_H, LABEL_H, LEGEND_H,
+    LANE_TOWER_WORLD, MID_PANEL_SIZE, MID_RUNE_SPOTS,
     MID_SUPERSAMPLE,
-    MID_WINDOW_CX, MID_WINDOW_CY, MID_WINDOW_HALF, PAD, SHEET_MAP_SIZE,
+    MID_WINDOW_CX, MID_WINDOW_CY, MID_WINDOW_HALF, OPENDOTA_MAP_WORLD_BOUNDS, PAD,
+    SHEET_MAP_SIZE,
     SIDE_LANE_WINDOWS, _game_world_to_grid, _lane_crop_box, _map_asset_path,
     _map_world_bounds,
     _mid_to_src,
     _zoom_to_panel,
-    cluster_mid_spots, cluster_wards, in_mid_window, mid_ward_events,
+    bounds_rect, cluster_mid_spots, cluster_wards, grid_to_world, in_mid_window,
+    lane_towers, mid_rune_spots, mid_ward_events,
     player_side_wards, render_mid_ward, render_player_lane_ward_rows,
     render_player_ward_rows,
     render_side_lane_ward, side_lane_ward_events,
@@ -330,19 +333,108 @@ def test_side_lane_crops_are_distinct_and_render_at_mid_zoom_size():
 
 
 def test_tower_landmarks_match_the_game_map_entity_origins():
-    # The installed map's minimap_boundary entities span -9472..9472.
-    # These are the pixel positions of its six Tier 1 origins on a 400px map.
+    # Without a readable map the current minimap is projected like OpenDota's
+    # image, -8192..8192 (where the Tier 1 origins sit on the lane art).
+    # These are the pixel positions of the six fallback Tier 1 origins on a
+    # 400px map.
     expected = {
-        "mid": ((167, 230), (211, 186)),
-        "top": ((66, 161), (89, 73)),
-        "bottom": ((303, 335), (332, 247)),
+        "mid": ((162, 234), (213, 184)),
+        "top": ((45, 155), (71, 53)),
+        "bottom": ((319, 356), (353, 255)),
     }
-    assert CURRENT_MAP_WORLD_BOUNDS == (-9472, 9472)
+    assert CURRENT_MAP_WORLD_BOUNDS == OPENDOTA_MAP_WORLD_BOUNDS == (-8192, -8192, 8192, 8192)
     for lane, towers in LANE_TOWER_WORLD.items():
         for (world_x, world_y, _label), pixel in zip(towers, expected[lane]):
             grid_x, grid_y = _game_world_to_grid(world_x, world_y)
             assert tuple(round(value) for value in _mid_to_src(
                 grid_x, grid_y, (400, 400), CURRENT_MAP_WORLD_BOUNDS)) == pixel
+
+
+def test_world_to_px_accepts_symmetric_and_rectangular_bounds():
+    assert bounds_rect((-8192, 8192)) == (-8192.0, -8192.0, 8192.0, 8192.0)
+    assert bounds_rect([-5120, -4608, 5120, 5120]) == (-5120.0, -4608.0, 5120.0, 5120.0)
+    assert grid_to_world(128, 128) == (0, 0)
+    assert grid_to_world(64, 192) == (-8192, 8192)
+    # A two-tuple keeps the old symmetric behaviour.
+    assert world_to_px(64, 64, 240, (-8192, 8192)) == world_to_px(64, 64, 240)
+    # An asymmetric boundary is honoured on each axis independently: the
+    # world origin is not at the image centre.
+    x, y = world_to_px(128, 128, 400, (-5120, -4608, 5120, 5120))
+    assert abs(x - 200) < 1e-9
+    assert abs(y - 400 * 5120 / 9728) < 1e-9
+    # The boundary corners map to the image corners.
+    left, bottom = world_to_px(*_game_world_to_grid(-5120, -4608), 400, (-5120, -4608, 5120, 5120))
+    right, top = world_to_px(*_game_world_to_grid(5120, 5120), 400, (-5120, -4608, 5120, 5120))
+    assert (round(left), round(bottom), round(right), round(top)) == (0, 400, 400, 0)
+
+
+def _fake_landmarks():
+    return {
+        "bounds": [-9000.0, -8500.0, 8800.0, 9100.0],
+        "towers": [
+            {"side": "radiant", "tier": 1, "lane": "mid", "name": "npc_dota_goodguys_tower1_mid",
+             "x": -1500.0, "y": -1400.0},
+            {"side": "dire", "tier": 1, "lane": "mid", "name": "npc_dota_badguys_tower1_mid",
+             "x": 500.0, "y": 650.0},
+            {"side": "radiant", "tier": 2, "lane": "mid", "name": "npc_dota_goodguys_tower2_mid",
+             "x": -3500.0, "y": -3000.0},
+            {"side": "dire", "tier": 1, "lane": "top", "name": "npc_dota_badguys_tower1_top",
+             "x": -5300.0, "y": 6000.0},
+        ],
+        "runes": [
+            {"kind": "bounty", "name": "", "x": -4000.0, "y": 3000.0},
+            {"kind": "powerup", "name": "", "x": -1700.0, "y": 1100.0},
+            {"kind": "powerup", "name": "", "x": 1700.0, "y": -1100.0},
+            {"kind": "xp", "name": "", "x": -7000.0, "y": 1000.0},
+        ],
+    }
+
+
+def test_map_landmarks_drive_bounds_towers_and_rune_spots(monkeypatch):
+    monkeypatch.setattr(ward_render, "map_landmarks", _fake_landmarks)
+    # The installed minimap uses the map's own boundary; OpenDota's image
+    # keeps OpenDota's projection.
+    assert _map_world_bounds(CURRENT_MAP_ASSET_PATH) == (-9000.0, -8500.0, 8800.0, 9100.0)
+    assert _map_world_bounds(ward_render.MAP_ASSET_PATH) == OPENDOTA_MAP_WORLD_BOUNDS
+    # Every tower on the lane is offered (the crop decides visibility).
+    assert lane_towers("mid") == ((-1500.0, -1400.0, "R T1"), (500.0, 650.0, "D T1"),
+                                  (-3500.0, -3000.0, "R T2"))
+    assert lane_towers("top") == ((-5300.0, 6000.0, "D T1"),)
+    # Only power-rune spawners (where water runes spawn) mark the mid crop.
+    assert mid_rune_spots() == [_game_world_to_grid(-1700.0, 1100.0), _game_world_to_grid(1700.0, -1100.0)]
+
+
+def test_map_landmark_fallbacks_when_no_map_is_readable(monkeypatch):
+    monkeypatch.setattr(ward_render, "map_landmarks", lambda: None)
+    assert _map_world_bounds(CURRENT_MAP_ASSET_PATH) == CURRENT_MAP_WORLD_BOUNDS
+    assert lane_towers("bottom") == LANE_TOWER_WORLD["bottom"]
+    assert mid_rune_spots() == list(MID_RUNE_SPOTS)
+    # A map whose lumps lack a lane still falls back for that lane only.
+    monkeypatch.setattr(ward_render, "map_landmarks", lambda: {"towers": _fake_landmarks()["towers"], "runes": []})
+    assert lane_towers("bottom") == LANE_TOWER_WORLD["bottom"]
+    assert lane_towers("top") == ((-5300.0, 6000.0, "D T1"),)
+    assert mid_rune_spots() == list(MID_RUNE_SPOTS)
+
+
+def test_lane_render_uses_landmark_towers_and_bounds(monkeypatch):
+    monkeypatch.setattr(ward_render, "map_landmarks", _fake_landmarks)
+    monkeypatch.setattr(ward_render, "_map_asset_path", lambda: CURRENT_MAP_ASSET_PATH)
+    monkeypatch.setattr(ward_render, "_load_mid_map_base",
+                        lambda: (Image.new("RGB", (512, 512), "#334455"), _map_world_bounds(CURRENT_MAP_ASSET_PATH)))
+    payload = _mid_payload({"Mid": [_mid_row(1, 2, True, "Mid", "Hero")]})
+    team = payload["teams"][0]
+    png, _summary = render_mid_ward(payload, team)
+    image = Image.open(io.BytesIO(png)).convert("RGB")
+    bounds = _map_world_bounds(CURRENT_MAP_ASSET_PATH)
+    for world_x, world_y, label in lane_towers("mid"):
+        x, y = _game_world_to_grid(world_x, world_y)
+        if not (abs(x - MID_WINDOW_CX) <= MID_WINDOW_HALF and abs(y - MID_WINDOW_CY) <= MID_WINDOW_HALF):
+            continue
+        px, py = _zoom_to_panel(x, y, MID_WINDOW_CX, MID_WINDOW_CY, MID_WINDOW_HALF, (512, 512), bounds)
+        center = (round(px / 2), round(py / 2))
+        red, green, _blue = image.getpixel((center[0] + 17, center[1]))
+        assert (green > red * 1.3) if label.startswith("R") else (red > green * 1.3)
+        assert min(image.getpixel(center)) > 220
 
 
 def test_tower_projection_uses_the_exact_rounded_image_crop():

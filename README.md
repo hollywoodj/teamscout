@@ -187,8 +187,20 @@ supports. Heatmap is the default Game Wards view; the Heatmap and Individual
 Wards buttons switch between density and exact placement maps. Each image
 opens on its own; a short note appears above the maps only when ward data
 is unavailable. On a machine with Dota 2 installed, the bot extracts the
-current minimap from the local game files and caches it for map rendering.
-If that map is unavailable, it uses OpenDota's 7.40 map background.
+current minimap texture from the local game files (`pak01_dir.vpk`) and
+reads the map's own entity lumps (`maps/dota.vpk`) for the two
+`dota_minimap_boundary` corners, every tower origin and every rune spawner,
+so wards, the Tier 1 tower markers and the mid rune markers are projected
+with exactly the numbers the game uses for its minimap. Both are cached
+under `cache/` (`dota_current_minimap.png`, `dota_map_landmarks.json`) and
+refreshed whenever the game updates. If the game files are unavailable the
+maps fall back to OpenDota's 7.40 image with OpenDota's 64..192 ward-cell
+projection and built-in 7.41 tower/rune positions; `python -m scout.briefing_cli`
+then prints a one-line warning on stderr and the snapshot's `meta.json`
+carries a `map` block saying which background and landmarks were used.
+`python -m scout.dota_map_entities` prints the boundary, towers and runes
+read from the installed map, which is the quickest way to check the
+landmarks on a machine with Dota installed.
 
 ```powershell
 python scout_bot.py                                    # gateway: slash commands (/week, /standings, /matchups, /roster, /recent, /briefing, /scoutingreport)
