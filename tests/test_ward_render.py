@@ -42,18 +42,35 @@ def test_cluster_wards_ignores_bad_points():
 
 
 def test_world_to_px_matches_web_formula():
+    # OpenDota's 64..192 ward-cell convention on a -8192..8192 map:
     # x=64,y=64 -> left 0%, top 100% (bottom-left of a top-origin canvas)
-    x, y = world_to_px(64, 64, 240)
+    x, y = world_to_px(64, 64, 240, (-8192, 8192))
     assert abs(x - 0) < 0.01
     assert abs(y - 240) < 0.01
     # x=192,y=192 -> left 100%, top 0%
-    x, y = world_to_px(192, 192, 240)
+    x, y = world_to_px(192, 192, 240, (-8192, 8192))
     assert abs(x - 240) < 0.01
     assert abs(y - 0) < 0.01
     # midpoint -> 50/50
-    x, y = world_to_px(128, 128, 240)
+    x, y = world_to_px(128, 128, 240, (-8192, 8192))
     assert abs(x - 120) < 0.01
     assert abs(y - 120) < 0.01
+
+
+def test_opendota_image_bounds_put_tier1_towers_on_their_icons():
+    # Pixel positions of the six Tier 1 origins on OpenDota's 900px
+    # detailed_740.jpg, obtained by registering an in-game minimap screenshot
+    # (whose tower icons fit the origins to ~1px) onto that image.
+    expected = {
+        "top": ((101.4, 345.6), (158.7, 120.4)),
+        "mid": ((359.8, 521.5), (471.3, 410.5)),
+        "bottom": ((705.1, 789.4), (781.1, 566.3)),
+    }
+    assert OPENDOTA_MAP_WORLD_BOUNDS == (-8213, -8422, 8473, 8273)
+    for lane, towers in LANE_TOWER_WORLD.items():
+        for (world_x, world_y, _label), (ex, ey) in zip(towers, expected[lane]):
+            px, py = world_to_px(*_game_world_to_grid(world_x, world_y), 900, OPENDOTA_MAP_WORLD_BOUNDS)
+            assert abs(px - ex) < 2.5 and abs(py - ey) < 2.5, (lane, px, py)
 
 
 def _official_row(team_key, position, patch, is_radiant, obs=None, sen=None):
@@ -333,16 +350,16 @@ def test_side_lane_crops_are_distinct_and_render_at_mid_zoom_size():
 
 
 def test_tower_landmarks_match_the_game_map_entity_origins():
-    # Without a readable map the current minimap is projected like OpenDota's
-    # image, -8192..8192 (where the Tier 1 origins sit on the lane art).
+    # Without a readable map the installed minimap texture is projected at
+    # -8192..8192, the extent measured from the game's own tower icons.
     # These are the pixel positions of the six fallback Tier 1 origins on a
-    # 400px map.
+    # 400px copy of that texture.
     expected = {
         "mid": ((162, 234), (213, 184)),
         "top": ((45, 155), (71, 53)),
         "bottom": ((319, 356), (353, 255)),
     }
-    assert CURRENT_MAP_WORLD_BOUNDS == OPENDOTA_MAP_WORLD_BOUNDS == (-8192, -8192, 8192, 8192)
+    assert CURRENT_MAP_WORLD_BOUNDS == (-8192, -8192, 8192, 8192)
     for lane, towers in LANE_TOWER_WORLD.items():
         for (world_x, world_y, _label), pixel in zip(towers, expected[lane]):
             grid_x, grid_y = _game_world_to_grid(world_x, world_y)
@@ -355,8 +372,8 @@ def test_world_to_px_accepts_symmetric_and_rectangular_bounds():
     assert bounds_rect([-5120, -4608, 5120, 5120]) == (-5120.0, -4608.0, 5120.0, 5120.0)
     assert grid_to_world(128, 128) == (0, 0)
     assert grid_to_world(64, 192) == (-8192, 8192)
-    # A two-tuple keeps the old symmetric behaviour.
-    assert world_to_px(64, 64, 240, (-8192, 8192)) == world_to_px(64, 64, 240)
+    # A two-tuple is the same as the equivalent symmetric four-tuple.
+    assert world_to_px(64, 64, 240, (-8192, 8192)) == world_to_px(64, 64, 240, (-8192, -8192, 8192, 8192))
     # An asymmetric boundary is honoured on each axis independently: the
     # world origin is not at the image centre.
     x, y = world_to_px(128, 128, 400, (-5120, -4608, 5120, 5120))

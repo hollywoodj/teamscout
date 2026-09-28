@@ -27,15 +27,23 @@ MAP_ASSET_URL = "https://www.opendota.com/assets/images/dota2/map/detailed_740.j
 CURRENT_MAP_ASSET_PATH = MAP_ASSET_PATH.parent.parent / "dota_current_minimap.png"
 MAP_LANDMARKS_PATH = MAP_ASSET_PATH.parent.parent / "dota_map_landmarks.json"
 # World extent of a map image in game units: (min_x, min_y, max_x, max_y).
-# The installed minimap is projected with the map's own dota_minimap_boundary
-# corners, read from maps/dota.vpk by scout/dota_map_entities.py, so these
-# constants only apply while that read is unavailable. OpenDota's image
-# follows OpenDota's 64..192 ward-cell convention (-8192..8192), and the
-# in-game texture is drawn to that same extent: the Tier 1 tower origins
-# land on the lane art at these bounds, while wider bounds put them in the
-# trees and away from the squares the in-game minimap draws.
+#
+# The installed minimap texture spans -8192..8192 on both axes: on an
+# in-game minimap screenshot the six Tier 1 tower icons fit one linear
+# projection per axis to within a pixel (identical scale on x and y), and
+# that projection puts +-8192 exactly on the HUD frame. The map's own
+# dota_minimap_boundary corners, read from maps/dota.vpk by
+# scout/dota_map_entities.py, take precedence whenever they can be read.
+#
+# OpenDota's detailed_740.jpg is a slightly different crop of that terrain.
+# Registering the screenshot's terrain onto the image (edge-map cross
+# correlation, sub-pixel) and pushing the tower projection through it gives
+# these bounds; with them every Tier 1 origin lands on the lane art and on
+# the icon the game draws. OpenDota's own 64..192 ward-cell convention
+# (-8192..8192) is 1-2% off on this image, which is what put the tower
+# markers beside the lanes before.
 CURRENT_MAP_WORLD_BOUNDS = (-8192, -8192, 8192, 8192)
-OPENDOTA_MAP_WORLD_BOUNDS = (-8192, -8192, 8192, 8192)
+OPENDOTA_MAP_WORLD_BOUNDS = (-8213, -8422, 8473, 8273)
 
 WARD_PATCH_NAME = "7.41"
 WARD_PATCH_FALLBACK_ID = 60
@@ -536,9 +544,11 @@ def render_player_ward_rows(payload, team, heatmap=False):
 
 # The window is a grid-unit square centred between the two runes flanking mid
 # lane. The rune markers come from the installed map's power-rune spawners
-# (water runes spawn on those spots); MID_RUNE_SPOTS is the approximate,
-# eyeballed fallback used when the map cannot be read.
-MID_RUNE_SPOTS = [(115.2, 136.3), (137.2, 118.7)]  # approximate fallback
+# (water runes spawn on those spots). MID_RUNE_SPOTS is the fallback used
+# when the map cannot be read: the two river rune icons measured on an
+# in-game minimap screenshot and pushed through the same tower-calibrated
+# projection as the map bounds above (about 50 world units of precision).
+MID_RUNE_SPOTS = [(115.0, 136.6), (136.9, 118.3)]
 MID_WINDOW_CX, MID_WINDOW_CY, MID_WINDOW_HALF = 126.2, 127.5, 17
 MID_WARD_CUTOFF = 60
 MID_CLUSTER_RADIUS = 2.0
