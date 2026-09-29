@@ -189,18 +189,23 @@ opens on its own; a short note appears above the maps only when ward data
 is unavailable. On a machine with Dota 2 installed, the bot extracts the
 current minimap texture from the local game files (`pak01_dir.vpk`) and
 reads the map's own entity lumps (`maps/dota.vpk`) for the two
-`dota_minimap_boundary` corners, every tower origin and every rune spawner,
-so wards, the Tier 1 tower markers and the mid rune markers are projected
-with exactly the numbers the game uses for its minimap. Both are cached
+`dota_minimap_boundary` corners, every tower origin, every rune spawner and
+every tree, so wards, the tower markers, the mid rune markers and the trees
+are projected with exactly the numbers the game uses for its minimap. Towers
+are drawn as the in-game minimap's red and green cubes (square on the side
+lanes, turned 45 degrees on mid) at the game's icon size, so a lane image
+lines up with the same area of the in-game minimap. Trees are drawn from the
+map's `ent_dota_tree` origins over the installed minimap. Both are cached
 under `cache/` (`dota_current_minimap.png`, `dota_map_landmarks.json`) and
 refreshed whenever the game updates. If the game files are unavailable the
-maps fall back to OpenDota's 7.40 image with OpenDota's 64..192 ward-cell
-projection and built-in 7.41 tower/rune positions; `python -m scout.briefing_cli`
+maps fall back to OpenDota's 7.40 image, whose trees are painted in and
+whose extent was calibrated against an in-game minimap, with built-in 7.41
+tower/rune positions; `python -m scout.briefing_cli`
 then prints a one-line warning on stderr and the snapshot's `meta.json`
 carries a `map` block saying which background and landmarks were used.
-`python -m scout.dota_map_entities` prints the boundary, towers and runes
-read from the installed map, which is the quickest way to check the
-landmarks on a machine with Dota installed.
+`python -m scout.dota_map_entities` prints the boundary, towers, runes and
+tree count read from the installed map, which is the quickest way to check
+the landmarks on a machine with Dota installed.
 
 ```powershell
 python scout_bot.py                                    # gateway: slash commands (/week, /standings, /matchups, /roster, /recent, /briefing, /scoutingreport)

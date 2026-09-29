@@ -6,7 +6,7 @@ import pytest
 
 from scout import dota_map_asset
 from scout.dota_map_entities import (
-    MapEntityError, _lz4_block_decode, ensure_map_landmarks, entities_from_resource,
+    LANDMARKS_VERSION, MapEntityError, _lz4_block_decode, ensure_map_landmarks, entities_from_resource,
     landmarks_from_entities, map_vpk_candidates, murmur2, parse_kv3, read_map_landmarks,
     resource_blocks, vector3, vpk_entries, vpk_read,
 )
@@ -77,6 +77,9 @@ def test_kv3_v4_zstd_dota_lump_yields_boundary_towers_and_runes():
     assert counts["dota_minimap_boundary"] == 2
     assert counts["npc_dota_tower"] == 4
     landmarks = landmarks_from_entities(entities)
+    # Every tree comes through, as whole world units.
+    assert len(landmarks["trees"]) == 1547
+    assert all(len(t) == 2 and all(isinstance(v, int) for v in t) for t in landmarks["trees"])
     # Corners are combined into (min_x, min_y, max_x, max_y); this custom
     # map's boundary is not centred on the world origin.
     assert landmarks["bounds"] == [-5120.0, -4608.0, 5120.0, 5120.0]
@@ -116,6 +119,8 @@ def test_landmarks_from_entities_parses_real_map_names():
         ("bounty", ""), ("powerup", "rune_top"), ("xp", "")]
     assert landmarks["ancients"] == [{"side": "dire", "name": "npc_dota_badguys_fort", "x": 5500.0, "y": 5000.0}]
     assert landmarks["landmarks"] == []
+    assert landmarks["trees"] == [[1, 2]]
+    assert landmarks["version"] == LANDMARKS_VERSION
 
 
 def test_vector3_accepts_strings_and_lists():
@@ -168,7 +173,8 @@ def test_ensure_map_landmarks_caches_per_vpk_version(tmp_path, monkeypatch):
 
     def fake_read(path):
         calls.append(path)
-        return {"bounds": [-1.0, -2.0, 3.0, 4.0], "towers": [], "runes": []}, vpk
+        return {"version": LANDMARKS_VERSION, "bounds": [-1.0, -2.0, 3.0, 4.0],
+                "towers": [], "runes": [], "trees": [[5, 6]]}, vpk
 
     monkeypatch.setattr(mod, "read_map_landmarks", fake_read)
     cache = tmp_path / "cache" / "dota_map_landmarks.json"
@@ -181,6 +187,13 @@ def test_ensure_map_landmarks_caches_per_vpk_version(tmp_path, monkeypatch):
     vpk.write_bytes(b"a different vpk")
     ensure_map_landmarks(cache, [game_dir])
     assert len(calls) == 2  # changed VPK -> re-read
+    # A cache written before trees were extracted (older version) is re-read
+    # even though the VPK itself is unchanged.
+    stale = json.loads(cache.read_text())
+    stale.pop("version"); stale.pop("trees")
+    cache.write_text(json.dumps(stale))
+    assert ensure_map_landmarks(cache, [game_dir])["trees"] == [[5, 6]]
+    assert len(calls) == 3
     # No install at all: the last cache still answers, and nothing otherwise.
     assert ensure_map_landmarks(cache, [tmp_path / "missing"])["bounds"] == [-1.0, -2.0, 3.0, 4.0]
     assert ensure_map_landmarks(tmp_path / "none.json", [tmp_path / "missing"]) is None

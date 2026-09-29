@@ -1259,10 +1259,10 @@ function visionLine(players){const items=visionItems(players);return items?`<div
 const WARD_MAP_SRC="https://www.opendota.com/assets/images/dota2/map/detailed_740.jpg";
 function wardPatchId(){const p=(DATA.patches||[]).find(x=>String(x.name)==="7.41");return p?p.id:60}
 function isWardPatch(patch){return Number(patch)===Number(wardPatchId())}
-// OpenDota's detailed_740.jpg spans world x -8213..8473, y -8422..8273 (see
+// OpenDota's detailed_740.jpg spans world x -8237..8452, y -8401..8298 (see
 // OPENDOTA_MAP_WORLD_BOUNDS in scout/ward_render.py); ward cells are
 // 128 world units with cell 128 at the origin.
-function wardPct(x,y){const wx=(x-128)*128,wy=(y-128)*128;return {l:(wx+8213)/16686*100,t:(8273-wy)/16695*100}}
+function wardPct(x,y){const wx=(x-128)*128,wy=(y-128)*128;return {l:(wx+8237)/16689*100,t:(8298-wy)/16699*100}}
 function clusterWards(pts){
   const bin=5,map=new Map();
   for(const pt of pts||[]){

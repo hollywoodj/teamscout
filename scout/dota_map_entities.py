@@ -60,7 +60,11 @@ LANDMARK_CLASS_PREFIXES = (
     "ent_dota_fountain",
     "npc_dota_roshan_spawner",
     "ent_dota_shop",
+    "ent_dota_tree",
 )
+# Bumped whenever landmarks_from_entities() starts returning something new,
+# so a cache written by an older version is re-read from the map.
+LANDMARKS_VERSION = 2
 
 MAP_VPK_NAME = "dota.vpk"
 ENTITY_LUMP_PREFIX = "maps/dota/entities/"
@@ -803,15 +807,16 @@ _TOWER_RE = re.compile(r"(?:npc_)?dota_(goodguys|badguys)_tower(\d)(?:_(top|mid|
 
 
 def landmarks_from_entities(entities):
-    """Pick out the minimap boundary, towers, ancients and rune spawners.
+    """Pick out the minimap boundary, towers, ancients, rune spawners and trees.
 
     Returns {"bounds": [minx, miny, maxx, maxy] | None, "towers": [...],
-    "runes": [...], "ancients": [...], "landmarks": [...]} with every
-    origin in game world units."""
+    "runes": [...], "ancients": [...], "trees": [[x, y], ...],
+    "landmarks": [...]} with every origin in game world units."""
     corners = []
     towers = []
     runes = []
     ancients = []
+    trees = []
     others = []
     for entity in entities:
         classname = str(entity.get("classname") or "").lower()
@@ -825,6 +830,8 @@ def landmarks_from_entities(entities):
         target = _clean_name(entity.get("targetname") or "")
         if classname == "dota_minimap_boundary":
             corners.append((x, y))
+        elif classname == "ent_dota_tree":
+            trees.append([round(x), round(y)])
         elif classname == "npc_dota_tower":
             match = _TOWER_RE.search(unit.lower()) or _TOWER_RE.search(target.lower())
             if not match:
@@ -853,8 +860,9 @@ def landmarks_from_entities(entities):
         bounds = [min(xs), min(ys), max(xs), max(ys)]
     towers.sort(key=lambda t: (t["side"], t["tier"], t["lane"]))
     runes.sort(key=lambda r: (r["kind"], r["x"], r["y"]))
-    return {"bounds": bounds, "towers": towers, "runes": runes,
-            "ancients": ancients, "landmarks": others}
+    trees.sort()
+    return {"version": LANDMARKS_VERSION, "bounds": bounds, "towers": towers,
+            "runes": runes, "ancients": ancients, "trees": trees, "landmarks": others}
 
 
 # ---------------------------------------------------------------------------
@@ -960,7 +968,8 @@ def ensure_map_landmarks(cache_path, game_dirs):
                 cached = json.loads(cache_path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 cached = None
-            if isinstance(cached, dict) and cached.get("stamp") == stamp:
+            if (isinstance(cached, dict) and cached.get("stamp") == stamp
+                    and cached.get("version") == LANDMARKS_VERSION):
                 return cached
         landmarks, _source = read_map_landmarks(game_dir)
         if landmarks is None:
@@ -998,7 +1007,9 @@ def _main(argv=None):
             continue
         if landmarks is None:
             continue
-        print(json.dumps({k: v for k, v in landmarks.items() if k != "landmarks"}, indent=1))
+        summary = {k: v for k, v in landmarks.items() if k not in ("landmarks", "trees")}
+        summary["trees"] = len(landmarks.get("trees") or [])
+        print(json.dumps(summary, indent=1))
         return 0
     print("No readable Dota map found (looked for maps/dota.vpk under: "
           + ", ".join(str(g) for g in game_dirs) + ")", file=sys.stderr)

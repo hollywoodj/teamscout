@@ -43,7 +43,7 @@ MAP_LANDMARKS_PATH = MAP_ASSET_PATH.parent.parent / "dota_map_landmarks.json"
 # (-8192..8192) is 1-2% off on this image, which is what put the tower
 # markers beside the lanes before.
 CURRENT_MAP_WORLD_BOUNDS = (-8192, -8192, 8192, 8192)
-OPENDOTA_MAP_WORLD_BOUNDS = (-8213, -8422, 8473, 8273)
+OPENDOTA_MAP_WORLD_BOUNDS = (-8237, -8401, 8452, 8298)
 
 WARD_PATCH_NAME = "7.41"
 WARD_PATCH_FALLBACK_ID = 60
@@ -182,6 +182,7 @@ def map_info():
         "landmarks": "dota" if landmarks and landmarks.get("bounds") else "builtin",
         "towers": len((landmarks or {}).get("towers") or []),
         "runes": len((landmarks or {}).get("runes") or []),
+        "trees": len((landmarks or {}).get("trees") or []),
     }
 
 
@@ -653,21 +654,111 @@ def _draw_water_rune(draw, cx, cy, size):
     draw.polygon([top, right, bottom, left], outline=navy, width=width)
 
 
-def _draw_tower_marker(draw, cx, cy, side):
-    """Draw a compact tower silhouette at a lane's Tier 1 position."""
-    s = MID_SUPERSAMPLE
-    radius = 22 * s
-    fill = "#248b48" if side == "R" else "#b74747"
-    draw.ellipse((cx - radius, cy - radius, cx + radius, cy + radius),
-                 fill=fill, outline="#f2f3f5", width=2 * s)
-    # Three battlements, a tapered body, and a base read as a tower even
-    # after the supersampled lane image is reduced for Discord.
-    points = [(-12, -11), (-7, -11), (-7, -6), (-3, -6), (-3, -11),
-              (3, -11), (3, -6), (7, -6), (7, -11), (12, -11),
-              (12, -3), (9, -3), (8, 9), (-8, 9), (-9, -3), (-12, -3)]
-    draw.polygon([(cx + x * s, cy + y * s) for x, y in points], fill="#ffffff")
-    draw.rectangle((cx - 12 * s, cy + 9 * s, cx + 12 * s, cy + 12 * s),
-                   fill="#ffffff")
+# Tower markers copy the in-game minimap's tower cubes. Geometry is in
+# "icon pixels" measured on an in-game minimap screenshot, relative to the
+# tower origin's projection (+x right, +y down); one icon pixel is
+# TOWER_ICON_UNIT world units there, so the cubes keep the game's size
+# against the terrain at every crop scale.
+TOWER_ICON_UNIT = 48.0
+# Side lanes: a square cube seen from the front (top face over a front face,
+# a one-pixel shaded right edge, black outline heavier on the top/left).
+TOWER_SQUARE_FACE = (-4.74, -4.16, 5.26, 5.84)  # left, top, right, bottom
+TOWER_SQUARE_TOP_BOTTOM = 1.84                   # top face ends, front face starts
+TOWER_SQUARE_SIDE_LEFT = 4.26                    # shaded right strip starts
+TOWER_SQUARE_OUTLINE = (2.0, 2.0, 1.0, 1.0)      # left, top, right, bottom
+# Mid: the same cube turned 45 degrees, a hexagon of top, left and right faces.
+TOWER_DIAMOND = {
+    "top": (-0.12, -7.17), "right": (6.38, -1.6), "right_low": (6.38, 3.15),
+    "bottom": (-0.12, 7.83), "left_low": (-6.62, 3.15), "left": (-6.62, -1.5),
+    "centre": (-0.12, 3.07),
+}
+TOWER_DIAMOND_OUTLINE = 1.2
+TOWER_COLORS = {
+    "R": {"top": (128, 242, 0), "front": (104, 198, 0), "side_top": (84, 163, 0),
+          "side_front": (67, 132, 0), "left": (65, 129, 0), "right": (37, 79, 0)},
+    "D": {"top": (255, 0, 0), "front": (209, 0, 0), "side_top": (229, 0, 0),
+          "side_front": (189, 0, 0), "left": (136, 0, 0), "right": (82, 0, 0)},
+}
+
+# Trees from the map's ent_dota_tree entities, drawn over the installed
+# minimap (OpenDota's fallback image already has its trees painted in).
+TREE_DIAMETER = 150.0  # world units
+TREE_COLORS = {
+    "radiant": {"outline": (34, 52, 10), "body": (76, 112, 18), "light": (118, 156, 40)},
+    "dire": {"outline": (18, 28, 38), "body": (56, 84, 106), "light": (92, 122, 144)},
+}
+
+
+def _draw_tower_cube(draw, cx, cy, side, diamond, kx, ky):
+    """Draw the game's tower cube centred on projection (cx, cy).
+
+    `kx`/`ky` are panel pixels per world unit; `diamond` selects the rotated
+    mid-lane icon. `side` is "R" or "D"."""
+    colors = TOWER_COLORS["R" if side == "R" else "D"]
+    ux, uy = TOWER_ICON_UNIT * kx, TOWER_ICON_UNIT * ky
+
+    def at(x, y):
+        return cx + x * ux, cy + y * uy
+
+    if diamond:
+        g = TOWER_DIAMOND
+        hexagon = [at(*g[k]) for k in ("top", "right", "right_low", "bottom", "left_low", "left")]
+        # Outline: the hexagon grown outward from its centre by the outline width.
+        mid_x = sum(p[0] for p in hexagon) / 6
+        mid_y = sum(p[1] for p in hexagon) / 6
+        grow = TOWER_DIAMOND_OUTLINE * ux
+        outline = []
+        for x, y in hexagon:
+            dx, dy = x - mid_x, y - mid_y
+            length = math.hypot(dx, dy) or 1.0
+            outline.append((x + dx / length * grow, y + dy / length * grow))
+        draw.polygon(outline, fill=(0, 0, 0))
+        draw.polygon([at(*g["left"]), at(*g["centre"]), at(*g["bottom"]), at(*g["left_low"])],
+                     fill=colors["left"])
+        draw.polygon([at(*g["centre"]), at(*g["right"]), at(*g["right_low"]), at(*g["bottom"])],
+                     fill=colors["right"])
+        draw.polygon([at(*g["top"]), at(*g["right"]), at(*g["centre"]), at(*g["left"])],
+                     fill=colors["top"])
+        return
+
+    left, top, right, bottom = TOWER_SQUARE_FACE
+    ol, ot, orr, ob = TOWER_SQUARE_OUTLINE
+    split, strip = TOWER_SQUARE_TOP_BOTTOM, TOWER_SQUARE_SIDE_LEFT
+    draw.rectangle((*at(left - ol, top - ot), *at(right + orr, bottom + ob)), fill=(0, 0, 0))
+    draw.rectangle((*at(left, top), *at(strip, split)), fill=colors["top"])
+    draw.rectangle((*at(left, split), *at(strip, bottom)), fill=colors["front"])
+    draw.rectangle((*at(strip, top), *at(right, split)), fill=colors["side_top"])
+    draw.rectangle((*at(strip, split), *at(right, bottom)), fill=colors["side_front"])
+
+
+def _draw_tree(draw, cx, cy, world_x, world_y, kx, ky):
+    """A small pine in the minimap art's style, green on the Radiant half and
+    blue-grey on the Dire half (split along the river diagonal)."""
+    colors = TREE_COLORS["dire" if world_x + world_y > 0 else "radiant"]
+    w = TREE_DIAMETER * kx / 2
+    h = TREE_DIAMETER * ky / 2
+    body = [(cx, cy - h * 1.15), (cx + w * 0.55, cy - h * 0.25), (cx + w * 0.35, cy - h * 0.25),
+            (cx + w * 0.95, cy + h * 0.75), (cx - w * 0.95, cy + h * 0.75),
+            (cx - w * 0.35, cy - h * 0.25), (cx - w * 0.55, cy - h * 0.25)]
+    pad = max(1.0, w * 0.18)
+    draw.polygon([(x + (pad if x > cx else -pad if x < cx else 0), y + (pad if y > cy else -pad))
+                  for x, y in body], fill=colors["outline"])
+    draw.polygon(body, fill=colors["body"])
+    draw.polygon([(cx, cy - h * 1.15), (cx - w * 0.55, cy - h * 0.25), (cx - w * 0.35, cy - h * 0.25),
+                  (cx - w * 0.95, cy + h * 0.75), (cx - w * 0.2, cy + h * 0.75)], fill=colors["light"])
+    draw.rectangle((cx - w * 0.14, cy + h * 0.75, cx + w * 0.14, cy + h * 1.05), fill=colors["outline"])
+
+
+def map_trees():
+    """World (x, y) of every ent_dota_tree in the installed map, or []."""
+    trees = (map_landmarks() or {}).get("trees") or []
+    out = []
+    for point in trees:
+        try:
+            out.append((float(point[0]), float(point[1])))
+        except (TypeError, ValueError, IndexError):
+            continue
+    return out
 
 
 def cluster_mid_spots(wards, radius=MID_CLUSTER_RADIUS):
@@ -803,11 +894,36 @@ def _load_mid_map_base():
             _map_world_bounds(map_path))
 
 
-def _render_zoomed_lane(games, wards, cx, cy, half, label, cutoff, markers=(), towers=()):
-    """Draw matching Radiant/Dire crops with the mid map's spot styling."""
+def _render_zoomed_lane(games, wards, cx, cy, half, label, cutoff, markers=(), towers=(),
+                        diamond_towers=False, trees=None):
+    """Draw matching Radiant/Dire crops with the mid map's spot styling.
+
+    `trees` are world (x, y) tree origins to draw under everything else;
+    None draws the installed map's trees when the background is the
+    installed minimap (OpenDota's fallback image has its own trees)."""
     base, bounds = _load_mid_map_base()
-    crop = base.crop(_lane_crop_box(cx, cy, half, base.size, bounds)).resize(
-        (MID_PANEL_SIZE * MID_SUPERSAMPLE, MID_PANEL_SIZE * MID_SUPERSAMPLE), Image.LANCZOS)
+    box = _lane_crop_box(cx, cy, half, base.size, bounds)
+    scale = MID_PANEL_SIZE * MID_SUPERSAMPLE
+    crop = base.crop(box).resize((scale, scale), Image.LANCZOS)
+    # Panel pixels per world unit, from the same rounded crop as the image.
+    min_x, min_y, max_x, max_y = bounds_rect(bounds)
+    kx = scale / (box[2] - box[0]) * base.size[0] / (max_x - min_x)
+    ky = scale / (box[3] - box[1]) * base.size[1] / (max_y - min_y)
+    if trees is None:
+        trees = map_trees() if Path(_map_asset_path()) == CURRENT_MAP_ASSET_PATH else ()
+    margin = TREE_DIAMETER / 128
+    visible_trees = []
+    for world_x, world_y in trees:
+        gx, gy = _game_world_to_grid(world_x, world_y)
+        if abs(gx - cx) <= half + margin and abs(gy - cy) <= half + margin:
+            visible_trees.append((world_x, world_y, *_zoom_to_panel(gx, gy, cx, cy, half,
+                                                                    base.size, bounds)))
+    # Draw far trees first so nearer (lower) ones overlap them, like the art.
+    visible_trees.sort(key=lambda t: t[3])
+    if visible_trees:
+        draw = ImageDraw.Draw(crop)
+        for world_x, world_y, px, py in visible_trees:
+            _draw_tree(draw, px, py, world_x, world_y, kx, ky)
 
     def font(size, bold=False):
         return _font(FONT_BOLD if bold else FONT_REGULAR, size)
@@ -824,7 +940,7 @@ def _render_zoomed_lane(games, wards, cx, cy, half, label, cutoff, markers=(), t
             if not (abs(tx - cx) <= half and abs(ty - cy) <= half):
                 continue
             px, py = _zoom_to_panel(tx, ty, cx, cy, half, base.size, bounds)
-            _draw_tower_marker(draw, px, py, tower_label[0])
+            _draw_tower_cube(draw, px, py, tower_label[0], diamond_towers, kx, ky)
 
         spots = cluster_mid_spots(wards[side])
         for spot in reversed(spots):
@@ -895,7 +1011,7 @@ def render_mid_ward(payload, team, cutoff=MID_WARD_CUTOFF):
     games, wards, _mid_names = mid_ward_events(payload, team, cutoff=cutoff)
     return _render_zoomed_lane(games, wards, MID_WINDOW_CX, MID_WINDOW_CY,
                                MID_WINDOW_HALF, "Mid ward", cutoff,
-                               mid_rune_spots(), lane_towers("mid"))
+                               mid_rune_spots(), lane_towers("mid"), diamond_towers=True)
 
 
 def render_side_lane_ward(payload, team, lane, cutoff=SIDE_LANE_CUTOFF):

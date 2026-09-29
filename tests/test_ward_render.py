@@ -62,11 +62,11 @@ def test_opendota_image_bounds_put_tier1_towers_on_their_icons():
     # detailed_740.jpg, obtained by registering an in-game minimap screenshot
     # (whose tower icons fit the origins to ~1px) onto that image.
     expected = {
-        "top": ((101.4, 345.6), (158.7, 120.4)),
-        "mid": ((359.8, 521.5), (471.3, 410.5)),
-        "bottom": ((705.1, 789.4), (781.1, 566.3)),
+        "top": ((102.5, 347.2), (159.8, 121.9)),
+        "mid": ((360.9, 523.1), (472.4, 412.1)),
+        "bottom": ((706.3, 791.0), (782.3, 567.9)),
     }
-    assert OPENDOTA_MAP_WORLD_BOUNDS == (-8213, -8422, 8473, 8273)
+    assert OPENDOTA_MAP_WORLD_BOUNDS == (-8237, -8401, 8452, 8298)
     for lane, towers in LANE_TOWER_WORLD.items():
         for (world_x, world_y, _label), (ex, ey) in zip(towers, expected[lane]):
             px, py = world_to_px(*_game_world_to_grid(world_x, world_y), 900, OPENDOTA_MAP_WORLD_BOUNDS)
@@ -451,7 +451,7 @@ def test_lane_render_uses_landmark_towers_and_bounds(monkeypatch):
         center = (round(px / 2), round(py / 2))
         red, green, _blue = image.getpixel((center[0] + 17, center[1]))
         assert (green > red * 1.3) if label.startswith("R") else (red > green * 1.3)
-        assert min(image.getpixel(center)) > 220
+        assert _is_cube_top(image.getpixel(center), label)
 
 
 def test_tower_projection_uses_the_exact_rounded_image_crop():
@@ -491,7 +491,87 @@ def test_tower_landmarks_are_visible_in_both_panels_of_every_lane():
                 center = (round(px / 2) + offset, round(py / 2))
                 red, green, _blue = image.getpixel((center[0] + 17, center[1]))
                 assert (green > red * 1.3) if label.startswith("R") else (red > green * 1.3)
-                assert min(image.getpixel(center)) > 220  # white tower silhouette
+                assert _is_cube_top(image.getpixel(center), label)  # the cube's lit top face
+
+
+def _is_cube_top(pixel, label):
+    red, green, blue = pixel[:3]
+    if label.startswith("R"):
+        return green > 200 and red < 170 and blue < 60   # (128, 242, 0)
+    return red > 220 and green < 50 and blue < 50        # (255, 0, 0)
+
+
+def _dark_installed_map(monkeypatch, landmarks):
+    monkeypatch.setattr(ward_render, "map_landmarks", lambda: landmarks)
+    monkeypatch.setattr(ward_render, "_map_asset_path", lambda: CURRENT_MAP_ASSET_PATH)
+    monkeypatch.setattr(ward_render, "_load_mid_map_base",
+                        lambda: (Image.new("RGB", (1024, 1024), (34, 52, 70)),
+                                 (-8192, -8192, 8192, 8192)))
+
+
+def _panel_point(world_x, world_y, cx, cy, half, dx_icon=0.0, dy_icon=0.0):
+    """Final (downsampled) panel pixel of a tower origin plus an offset in
+    the game's minimap icon pixels, on the 1024px dark test map."""
+    x, y = _game_world_to_grid(world_x, world_y)
+    px, py = _zoom_to_panel(x, y, cx, cy, half, (1024, 1024), (-8192, -8192, 8192, 8192))
+    k = MID_PANEL_SIZE * MID_SUPERSAMPLE / (2 * half * 128) * ward_render.TOWER_ICON_UNIT
+    return round((px + dx_icon * k) / MID_SUPERSAMPLE), round((py + dy_icon * k) / MID_SUPERSAMPLE)
+
+
+def test_towers_are_the_games_cubes_square_on_side_lanes_and_turned_on_mid(monkeypatch):
+    rt1_mid = (-1543.998535, -1407.998413)
+    rt1_top = (-6336.0, 1856.002197)
+    _dark_installed_map(monkeypatch, {
+        "bounds": [-8192.0, -8192.0, 8192.0, 8192.0], "runes": [], "trees": [],
+        "towers": [{"side": "radiant", "tier": 1, "lane": "mid", "x": rt1_mid[0], "y": rt1_mid[1]},
+                   {"side": "radiant", "tier": 1, "lane": "top", "x": rt1_top[0], "y": rt1_top[1]}]})
+    payload = _mid_payload({"Mid": [_mid_row(1, 2, True, "Mid", "Hero")]})
+    team = payload["teams"][0]
+    colors = ward_render.TOWER_COLORS["R"]
+
+    def close(pixel, color, tolerance=40):
+        return sum(abs(a - b) for a, b in zip(pixel[:3], color)) <= tolerance
+
+    mid = Image.open(io.BytesIO(render_mid_ward(payload, team)[0])).convert("RGB")
+    window = (MID_WINDOW_CX, MID_WINDOW_CY, MID_WINDOW_HALF)
+    # Mid: the turned cube's lit top, then its left and right faces below.
+    assert close(mid.getpixel(_panel_point(*rt1_mid, *window, 0, -3)), colors["top"])
+    assert close(mid.getpixel(_panel_point(*rt1_mid, *window, -3.5, 4)), colors["left"])
+    assert close(mid.getpixel(_panel_point(*rt1_mid, *window, 3.5, 4)), colors["right"])
+    # Just outside the hexagon is the black outline or the map, never green.
+    red, green, _blue = mid.getpixel(_panel_point(*rt1_mid, *window, 0, 9.5))
+    assert green < 90
+
+    top = Image.open(io.BytesIO(render_side_lane_ward(payload, team, "top")[0])).convert("RGB")
+    side = SIDE_LANE_WINDOWS["top"]
+    # Side lanes: a square cube, lit top face over a darker front face.
+    assert close(top.getpixel(_panel_point(*rt1_top, *side, 0, -2)), colors["top"])
+    assert close(top.getpixel(_panel_point(*rt1_top, *side, 0, 4)), colors["front"])
+    assert close(top.getpixel(_panel_point(*rt1_top, *side, 0, -5.9)), (0, 0, 0))
+
+
+def test_installed_map_trees_are_drawn_under_the_lane_markers(monkeypatch):
+    # Inside the mid window, clear of the towers, runes and the label.
+    tree_radiant, tree_dire = (-2000.0, 400.0), (1200.0, 1800.0)
+    landmarks = {"bounds": [-8192.0, -8192.0, 8192.0, 8192.0], "towers": [], "runes": [],
+                 "trees": [list(tree_radiant), list(tree_dire)]}
+    _dark_installed_map(monkeypatch, landmarks)
+    payload = _mid_payload({"Mid": [_mid_row(1, 2, True, "Mid", "Hero")]})
+    team = payload["teams"][0]
+    window = (MID_WINDOW_CX, MID_WINDOW_CY, MID_WINDOW_HALF)
+    image = Image.open(io.BytesIO(render_mid_ward(payload, team)[0])).convert("RGB")
+    for (wx, wy), key in ((tree_radiant, "radiant"), (tree_dire, "dire")):
+        red, green, blue = image.getpixel(_panel_point(wx, wy, *window, 0.4, 0))
+        body = ward_render.TREE_COLORS[key]["body"]
+        assert abs(red - body[0]) + abs(green - body[1]) + abs(blue - body[2]) < 30, (key, red, green, blue)
+    assert ward_render.map_info()["trees"] == 2
+
+    # OpenDota's fallback image already has its trees painted in: none added.
+    monkeypatch.setattr(ward_render, "_map_asset_path", lambda: ward_render.MAP_ASSET_PATH)
+    plain = Image.open(io.BytesIO(render_mid_ward(payload, team)[0])).convert("RGB")
+    for wx, wy in (tree_radiant, tree_dire):
+        pixel = plain.getpixel(_panel_point(wx, wy, *window, 0.4, 0))
+        assert abs(pixel[0] - 34) + abs(pixel[1] - 52) + abs(pixel[2] - 70) < 10
 
 
 def _ward_gold_pixels(image, x, y):
