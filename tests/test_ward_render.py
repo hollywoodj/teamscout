@@ -547,11 +547,39 @@ def _dark_installed_map(monkeypatch, landmarks):
 
 def _panel_point(world_x, world_y, cx, cy, half, dx_icon=0.0, dy_icon=0.0):
     """Final (downsampled) panel pixel of a tower origin plus an offset in
-    the game's minimap icon pixels, on the 1024px dark test map."""
+    the game's minimap icon pixels, on the 1024px dark test map. Icons have
+    one on-screen size on every lane image (the side-lane scale)."""
     x, y = _game_world_to_grid(world_x, world_y)
     px, py = _zoom_to_panel(x, y, cx, cy, half, (1024, 1024), (-8192, -8192, 8192, 8192))
-    k = MID_PANEL_SIZE * MID_SUPERSAMPLE / (2 * half * 128) * ward_render.TOWER_ICON_UNIT
+    k = (MID_PANEL_SIZE * MID_SUPERSAMPLE / (2 * ward_render.ICON_REFERENCE_HALF * 128)
+         * ward_render.TOWER_ICON_UNIT)
     return round((px + dx_icon * k) / MID_SUPERSAMPLE), round((py + dy_icon * k) / MID_SUPERSAMPLE)
+
+
+def test_mid_and_side_lane_cubes_share_one_on_screen_size(monkeypatch):
+    # In game every tower icon is drawn at one size on the minimap; the mid
+    # diamond is the same cube turned 45 degrees, so it covers ~1.2x the
+    # square's area (127 vs ~105 icon pixels on an in-game screenshot).
+    # The mid lane image is zoomed in further than the side lanes, which
+    # must not make its cubes bigger.
+    towers = [{"side": "radiant", "tier": 1, "lane": lane, "x": x, "y": y}
+              for lane, ((x, y, _label), _dire) in LANE_TOWER_WORLD.items()]
+    _dark_installed_map(monkeypatch, {"bounds": [-8192.0, -8192.0, 8192.0, 8192.0],
+                                      "towers": towers, "runes": [], "trees": []})
+    payload = _mid_payload({"Mid": [_mid_row(1, 2, True, "Mid", "Hero")]})
+    team = payload["teams"][0]
+
+    def cube_area(png):
+        pixels = Image.open(io.BytesIO(png)).convert("RGB").crop((0, 0, MID_PANEL_SIZE, MID_PANEL_SIZE))
+        data = pixels.tobytes()
+        return sum(1 for i in range(0, len(data), 3)
+                   if data[i + 1] > 60 and data[i + 1] > data[i] * 1.5 and data[i + 2] < 40)
+
+    mid = cube_area(render_mid_ward(payload, team)[0])
+    top = cube_area(render_side_lane_ward(payload, team, "top")[0])
+    bottom = cube_area(render_side_lane_ward(payload, team, "bottom")[0])
+    assert abs(top - bottom) / top < 0.05
+    assert 1.1 < mid / top < 1.35, (mid, top)
 
 
 def test_towers_are_the_games_cubes_square_on_side_lanes_and_turned_on_mid(monkeypatch):

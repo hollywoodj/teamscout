@@ -566,6 +566,12 @@ SIDE_LANE_WINDOWS = {
     "top": (95, 160, 27),
     "bottom": (160, 95, 27),
 }
+# Towers and rune icons keep one on-screen size on every lane image, the way
+# the in-game minimap draws its icons at a fixed size. That size is the one
+# that matches the game's icons on the side-lane crops (half-size 27); the
+# mid crop is zoomed in further, so its icons are scaled down by 17/27
+# rather than growing with the terrain. Trees still scale with the terrain.
+ICON_REFERENCE_HALF = 27
 # Fallback Tier 1 origins (game world units) for when the installed map's
 # entity lumps cannot be read; lane_towers() prefers the live npc_dota_tower
 # origins. These are reference markers, not match-specific alive/destroyed
@@ -936,6 +942,9 @@ def _render_zoomed_lane(games, wards, cx, cy, half, label, cutoff, markers=(), t
     min_x, min_y, max_x, max_y = bounds_rect(bounds)
     kx = scale / (box[2] - box[0]) * base.size[0] / (max_x - min_x)
     ky = scale / (box[3] - box[1]) * base.size[1] / (max_y - min_y)
+    # Icons (towers, runes) keep one on-screen size across lane images.
+    icon_kx = kx * half / ICON_REFERENCE_HALF
+    icon_ky = ky * half / ICON_REFERENCE_HALF
     if trees is None:
         trees = map_trees() if Path(_map_asset_path()) == CURRENT_MAP_ASSET_PATH else ()
     margin = TREE_DIAMETER / 128
@@ -951,14 +960,14 @@ def _render_zoomed_lane(games, wards, cx, cy, half, label, cutoff, markers=(), t
         draw = ImageDraw.Draw(crop)
         for world_x, world_y, px, py in visible_trees:
             _draw_tree(draw, px, py, world_x, world_y, kx, ky)
-    # Bounty runes: the game's rune icon at the game's size, clipped by the
-    # crop edge exactly as the in-game minimap would show that window.
-    icon_reach = RUNE_ICON_RADIUS * MINIMAP_ICON_UNIT / 128
+    # Bounty runes: the game's rune icon, clipped by the crop edge exactly as
+    # the in-game minimap would show that window.
+    icon_reach = RUNE_ICON_RADIUS * MINIMAP_ICON_UNIT / 128 * half / ICON_REFERENCE_HALF
     for world_x, world_y in (bounty_rune_spots() if bounty_runes is None else bounty_runes):
         gx, gy = _game_world_to_grid(world_x, world_y)
         if abs(gx - cx) <= half + icon_reach and abs(gy - cy) <= half + icon_reach:
             px, py = _zoom_to_panel(gx, gy, cx, cy, half, base.size, bounds)
-            draw_rune_icon(crop, px, py, MINIMAP_ICON_UNIT * kx, MINIMAP_ICON_UNIT * ky)
+            draw_rune_icon(crop, px, py, MINIMAP_ICON_UNIT * icon_kx, MINIMAP_ICON_UNIT * icon_ky)
 
     def font(size, bold=False):
         return _font(FONT_BOLD if bold else FONT_REGULAR, size)
@@ -975,7 +984,7 @@ def _render_zoomed_lane(games, wards, cx, cy, half, label, cutoff, markers=(), t
             if not (abs(tx - cx) <= half and abs(ty - cy) <= half):
                 continue
             px, py = _zoom_to_panel(tx, ty, cx, cy, half, base.size, bounds)
-            _draw_tower_cube(draw, px, py, tower_label[0], diamond_towers, kx, ky)
+            _draw_tower_cube(draw, px, py, tower_label[0], diamond_towers, icon_kx, icon_ky)
 
         spots = cluster_mid_spots(wards[side])
         for spot in reversed(spots):
