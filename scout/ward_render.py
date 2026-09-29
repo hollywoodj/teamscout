@@ -21,6 +21,7 @@ from pathlib import Path
 from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 from .bbc_source import team_key as _team_key
+from .minimap_icons import MINIMAP_ICON_UNIT, RUNE_ICON, draw_rune_icon
 
 MAP_ASSET_PATH = Path(__file__).resolve().parent.parent / "cache" / "assets" / "detailed_740.jpg"
 MAP_ASSET_URL = "https://www.opendota.com/assets/images/dota2/map/detailed_740.jpg"
@@ -547,9 +548,14 @@ def render_player_ward_rows(payload, team, heatmap=False):
 # lane. The rune markers come from the installed map's power-rune spawners
 # (water runes spawn on those spots). MID_RUNE_SPOTS is the fallback used
 # when the map cannot be read: the two river rune icons measured on an
-# in-game minimap screenshot and pushed through the same tower-calibrated
-# projection as the map bounds above (about 50 world units of precision).
-MID_RUNE_SPOTS = [(115.0, 136.6), (136.9, 118.3)]
+# in-game minimap screenshot (the centroid of each icon's whole disc) and
+# pushed through the same tower-calibrated projection as the map bounds
+# above (about 25 world units of precision).
+MID_RUNE_SPOTS = [(115.0, 136.4), (137.0, 118.3)]
+# Bounty rune spawners, in game world units, measured the same way from the
+# two jungle rune icons on that screenshot. The map's own
+# dota_item_rune_spawner_bounty origins replace these when readable.
+BOUNTY_RUNE_WORLD = ((-1029.0, 4401.0), (569.0, -4693.0))
 MID_WINDOW_CX, MID_WINDOW_CY, MID_WINDOW_HALF = 126.2, 127.5, 17
 MID_WARD_CUTOFF = 60
 MID_CLUSTER_RADIUS = 2.0
@@ -625,6 +631,22 @@ def mid_rune_spots():
     return list(MID_RUNE_SPOTS)
 
 
+def bounty_rune_spots():
+    """World (x, y) of every bounty rune spawner: the installed map's
+    dota_item_rune_spawner_bounty origins when readable, else the two
+    measured BOUNTY_RUNE_WORLD spots."""
+    runes = (map_landmarks() or {}).get("runes") or []
+    spots = []
+    for rune in runes:
+        if rune.get("kind") != "bounty":
+            continue
+        try:
+            spots.append((float(rune["x"]), float(rune["y"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return spots or list(BOUNTY_RUNE_WORLD)
+
+
 def _lane_crop_box(cx, cy, half, source_size=(MID_SRC_SIZE, MID_SRC_SIZE),
                    world_bounds=OPENDOTA_MAP_WORLD_BOUNDS):
     left, top = _mid_to_src(cx - half, cy + half, source_size, world_bounds)
@@ -659,7 +681,10 @@ def _draw_water_rune(draw, cx, cy, size):
 # tower origin's projection (+x right, +y down); one icon pixel is
 # TOWER_ICON_UNIT world units there, so the cubes keep the game's size
 # against the terrain at every crop scale.
-TOWER_ICON_UNIT = 48.0
+TOWER_ICON_UNIT = MINIMAP_ICON_UNIT
+# Furthest reach of the rune icon from its centre, in icon pixels.
+RUNE_ICON_RADIUS = max(math.hypot(x, y) for _layer, _color, shapes in RUNE_ICON
+                       for _hole, points in shapes for x, y in points)
 # Side lanes: a square cube seen from the front (top face over a front face,
 # a one-pixel shaded right edge, black outline heavier on the top/left).
 TOWER_SQUARE_FACE = (-4.74, -4.16, 5.26, 5.84)  # left, top, right, bottom
@@ -895,12 +920,14 @@ def _load_mid_map_base():
 
 
 def _render_zoomed_lane(games, wards, cx, cy, half, label, cutoff, markers=(), towers=(),
-                        diamond_towers=False, trees=None):
+                        diamond_towers=False, trees=None, bounty_runes=None):
     """Draw matching Radiant/Dire crops with the mid map's spot styling.
 
     `trees` are world (x, y) tree origins to draw under everything else;
     None draws the installed map's trees when the background is the
-    installed minimap (OpenDota's fallback image has its own trees)."""
+    installed minimap (OpenDota's fallback image has its own trees).
+    `bounty_runes` are world (x, y) bounty spawners drawn as the game's rune
+    icon; None uses bounty_rune_spots()."""
     base, bounds = _load_mid_map_base()
     box = _lane_crop_box(cx, cy, half, base.size, bounds)
     scale = MID_PANEL_SIZE * MID_SUPERSAMPLE
@@ -924,6 +951,14 @@ def _render_zoomed_lane(games, wards, cx, cy, half, label, cutoff, markers=(), t
         draw = ImageDraw.Draw(crop)
         for world_x, world_y, px, py in visible_trees:
             _draw_tree(draw, px, py, world_x, world_y, kx, ky)
+    # Bounty runes: the game's rune icon at the game's size, clipped by the
+    # crop edge exactly as the in-game minimap would show that window.
+    icon_reach = RUNE_ICON_RADIUS * MINIMAP_ICON_UNIT / 128
+    for world_x, world_y in (bounty_rune_spots() if bounty_runes is None else bounty_runes):
+        gx, gy = _game_world_to_grid(world_x, world_y)
+        if abs(gx - cx) <= half + icon_reach and abs(gy - cy) <= half + icon_reach:
+            px, py = _zoom_to_panel(gx, gy, cx, cy, half, base.size, bounds)
+            draw_rune_icon(crop, px, py, MINIMAP_ICON_UNIT * kx, MINIMAP_ICON_UNIT * ky)
 
     def font(size, bold=False):
         return _font(FONT_BOLD if bold else FONT_REGULAR, size)

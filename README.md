@@ -194,8 +194,11 @@ every tree, so wards, the tower markers, the mid rune markers and the trees
 are projected with exactly the numbers the game uses for its minimap. Towers
 are drawn as the in-game minimap's red and green cubes (square on the side
 lanes, turned 45 degrees on mid) at the game's icon size, so a lane image
-lines up with the same area of the in-game minimap. Trees are drawn from the
-map's `ent_dota_tree` origins over the installed minimap. Both are cached
+lines up with the same area of the in-game minimap. Bounty rune spawners are
+drawn as the game's rune icon (a gold loop around an orange gem, traced from
+the in-game minimap in `scout/minimap_icons.py`), also at the game's size and
+clipped by the crop edge the way the in-game minimap clips it. Trees are
+drawn from the map's `ent_dota_tree` origins over the installed minimap. Both are cached
 under `cache/` (`dota_current_minimap.png`, `dota_map_landmarks.json`) and
 refreshed whenever the game updates. If the game files are unavailable the
 maps fall back to OpenDota's 7.40 image, whose trees are painted in and

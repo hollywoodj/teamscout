@@ -14,7 +14,7 @@ from scout.ward_render import (
     _mid_to_src,
     _zoom_to_panel,
     bounds_rect, cluster_mid_spots, cluster_wards, grid_to_world, in_mid_window,
-    lane_towers, mid_rune_spots, mid_ward_events,
+    BOUNTY_RUNE_WORLD, bounty_rune_spots, lane_towers, mid_rune_spots, mid_ward_events,
     player_side_wards, render_mid_ward, render_player_lane_ward_rows,
     render_player_ward_rows,
     render_side_lane_ward, side_lane_ward_events,
@@ -419,6 +419,8 @@ def test_map_landmarks_drive_bounds_towers_and_rune_spots(monkeypatch):
     assert lane_towers("top") == ((-5300.0, 6000.0, "D T1"),)
     # Only power-rune spawners (where water runes spawn) mark the mid crop.
     assert mid_rune_spots() == [_game_world_to_grid(-1700.0, 1100.0), _game_world_to_grid(1700.0, -1100.0)]
+    # Bounty spawners come from the map's own bounty entities.
+    assert bounty_rune_spots() == [(-4000.0, 3000.0)]
 
 
 def test_map_landmark_fallbacks_when_no_map_is_readable(monkeypatch):
@@ -426,11 +428,45 @@ def test_map_landmark_fallbacks_when_no_map_is_readable(monkeypatch):
     assert _map_world_bounds(CURRENT_MAP_ASSET_PATH) == CURRENT_MAP_WORLD_BOUNDS
     assert lane_towers("bottom") == LANE_TOWER_WORLD["bottom"]
     assert mid_rune_spots() == list(MID_RUNE_SPOTS)
+    assert bounty_rune_spots() == list(BOUNTY_RUNE_WORLD)
     # A map whose lumps lack a lane still falls back for that lane only.
     monkeypatch.setattr(ward_render, "map_landmarks", lambda: {"towers": _fake_landmarks()["towers"], "runes": []})
     assert lane_towers("bottom") == LANE_TOWER_WORLD["bottom"]
     assert lane_towers("top") == ((-5300.0, 6000.0, "D T1"),)
     assert mid_rune_spots() == list(MID_RUNE_SPOTS)
+    assert bounty_rune_spots() == list(BOUNTY_RUNE_WORLD)
+
+
+def test_bounty_runes_are_drawn_as_the_games_rune_icon(monkeypatch):
+    from scout.minimap_icons import RUNE_ICON
+    bounty = (-3500.0, 4200.0)   # inside the top-lane crop, clear of its towers
+    _dark_installed_map(monkeypatch, {
+        "bounds": [-8192.0, -8192.0, 8192.0, 8192.0], "towers": [], "trees": [],
+        "runes": [{"kind": "bounty", "name": "", "x": bounty[0], "y": bounty[1]},
+                  {"kind": "powerup", "name": "", "x": -1669.0, "y": 1079.0}]})
+    payload = _mid_payload({"Mid": [_mid_row(1, 2, True, "Mid", "Hero")]})
+    team = payload["teams"][0]
+    top = Image.open(io.BytesIO(render_side_lane_ward(payload, team, "top")[0])).convert("RGB")
+    side = SIDE_LANE_WINDOWS["top"]
+    colors = {layer: color for layer, color, _shapes in RUNE_ICON}
+
+    def close(pixel, color, tolerance=45):
+        return sum(abs(a - b) for a, b in zip(pixel[:3], color)) <= tolerance
+
+    # The gold loop's lower curve, the gem's brown body and the black edge,
+    # at the positions measured on the game's icon (icon pixels from centre).
+    assert close(top.getpixel(_panel_point(*bounty, *side, -1.0, 6.2)), colors["gold"])
+    assert close(top.getpixel(_panel_point(*bounty, *side, -1.0, 2.5)), colors["gem_bottom"])
+    assert close(top.getpixel(_panel_point(*bounty, *side, 7.4, 1.0)), colors["silhouette"])
+    # Well outside the icon the map shows through.
+    assert close(top.getpixel(_panel_point(*bounty, *side, 0, 11)), (34, 52, 70), 12)
+    # Both panels carry it, and the crop without a bounty spot has none.
+    dire_x, dire_y = _panel_point(*bounty, *side, -1.0, 6.2)
+    assert close(top.getpixel((dire_x + MID_PANEL_SIZE + 24, dire_y)), colors["gold"])
+    mid = Image.open(io.BytesIO(render_mid_ward(payload, team)[0])).convert("RGB")
+    gold = colors["gold"]
+    assert not any(close(mid.getpixel((x, y)), gold, 30)
+                   for x in range(60, MID_PANEL_SIZE, 20) for y in range(60, MID_PANEL_SIZE, 20))
 
 
 def test_lane_render_uses_landmark_towers_and_bounds(monkeypatch):
