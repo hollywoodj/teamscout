@@ -651,3 +651,17 @@ def test_wards_page_uses_special_note_only_when_no_ward_data():
     assert container["components"][0]["type"] == TYPE_TEXT_DISPLAY
     assert container["components"][0]["content"] == "Not enough ward data yet."
     assert container["components"][1]["type"] == TYPE_MEDIA_GALLERY
+
+
+def test_briefing_cli_league_filter_picks_the_servers_team():
+    from scout.briefing import _find_team
+    from scout.briefing_cli import restrict_to_league
+
+    payload = {"teams": [
+        {"key": "teamanonyfunpolice", "name": "Team Anony: Fun Police", "league": "LD2L Season 22"},
+        {"key": "teamanonyfunpolice", "name": "Team Anony: Fun Police", "league": "RD2L Season 1",
+         "rd2lId": 7},
+    ]}
+    assert _find_team(restrict_to_league(payload, "RD2L"), "Team Anony: Fun Police")["rd2lId"] == 7
+    assert "rd2lId" not in _find_team(restrict_to_league(payload, "LD2L"), "Team Anony: Fun Police")
+    assert restrict_to_league(payload, None) is payload

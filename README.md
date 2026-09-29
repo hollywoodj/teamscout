@@ -234,6 +234,12 @@ An optional RD2L server can be added with `SCOUT_BOT_EXTRA_GUILD_ID` and
 `SCOUT_BOT_EXTRA_CHANNEL_ID`. Commands are restricted to that channel, and
 `/scoutingreport` requires the `team` option there.
 
+Scouting reports are locked per server: the main server (`SCOUT_BOT_GUILD_ID`)
+only offers and renders LD2L teams, and the extra server only RD2L teams. A team
+name that exists in both leagues resolves to that server's league. The BBC feed
+commands (`/week`, `/standings`, `/matchups`, `/roster`, `/recent`) are LD2L
+data, so they are only registered on the LD2L server.
+
 ## Sharing it with the team
 
 Team Scout is published to the internet through a Tailscale Funnel on the
