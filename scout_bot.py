@@ -127,9 +127,12 @@ def team_names(feed=None):
     return names
 
 
-def report_team_names(rd2l=None):
-    """Offer RD2L teams alongside LD2L names in report autocomplete."""
-    names = team_names()
+def report_team_names(rd2l=None, league=None):
+    """Report autocomplete names: LD2L (BBC feed), RD2L (rd2l_cache.json),
+    or both when `league` is None."""
+    names = team_names() if league in (None, "LD2L") else []
+    if league == "LD2L":
+        return names
     seen = {team_key(name) for name in names}
     if rd2l is None:
         try:
@@ -393,7 +396,10 @@ async def resolve_scout_channel(client, channel_id, force_fetch=False):
     return channel, guild
 
 
-def register_commands(tree, guild, channel_id="", default_team=DEFAULT_SCOUTING_REPORT_TEAM):
+def register_commands(tree, guild, channel_id="", default_team=DEFAULT_SCOUTING_REPORT_TEAM,
+                      league="LD2L"):
+    """Register one server's slash commands. `league` ("LD2L" or "RD2L")
+    locks that server's scouting reports to its own league's teams."""
     import discord
     from discord import app_commands
 
@@ -410,42 +416,44 @@ def register_commands(tree, guild, channel_id="", default_team=DEFAULT_SCOUTING_
     async def report_team_autocomplete(interaction: discord.Interaction, current: str):
         cur = current.lower()
         return [app_commands.Choice(name=name[:100], value=name[:100])
-                for name in report_team_names() if cur in name.lower()][:25]
+                for name in report_team_names(league=league) if cur in name.lower()][:25]
 
-    @tree.command(name="week", description="Current LD2L week from the BBC feed cache", guild=guild)
-    @gate
-    async def week_cmd(interaction: discord.Interaction):
-        await interaction.response.send_message(clip(format_week()), ephemeral=False)
+    if league == "LD2L":
+        # BBC feed commands are LD2L data; keep them off the RD2L server.
+        @tree.command(name="week", description="Current LD2L week from the BBC feed cache", guild=guild)
+        @gate
+        async def week_cmd(interaction: discord.Interaction):
+            await interaction.response.send_message(clip(format_week()), ephemeral=False)
 
-    @tree.command(name="standings", description="Season standings from the BBC feed cache", guild=guild)
-    @gate
-    async def standings_cmd(interaction: discord.Interaction):
-        await interaction.response.send_message(clip(format_standings()), ephemeral=False)
+        @tree.command(name="standings", description="Season standings from the BBC feed cache", guild=guild)
+        @gate
+        async def standings_cmd(interaction: discord.Interaction):
+            await interaction.response.send_message(clip(format_standings()), ephemeral=False)
 
-    @tree.command(name="matchups", description="This week's upcoming series from the BBC feed cache", guild=guild)
-    @gate
-    async def matchups_cmd(interaction: discord.Interaction):
-        await interaction.response.send_message(clip(format_matchups()), ephemeral=False)
+        @tree.command(name="matchups", description="This week's upcoming series from the BBC feed cache", guild=guild)
+        @gate
+        async def matchups_cmd(interaction: discord.Interaction):
+            await interaction.response.send_message(clip(format_matchups()), ephemeral=False)
 
-    @tree.command(name="roster", description="Posted roster for a team", guild=guild)
-    @app_commands.describe(team="Team name")
-    @app_commands.autocomplete(team=team_autocomplete)
-    @gate
-    async def roster_cmd(interaction: discord.Interaction, team: str):
-        await interaction.response.send_message(clip(format_roster(team)), ephemeral=False)
+        @tree.command(name="roster", description="Posted roster for a team", guild=guild)
+        @app_commands.describe(team="Team name")
+        @app_commands.autocomplete(team=team_autocomplete)
+        @gate
+        async def roster_cmd(interaction: discord.Interaction, team: str):
+            await interaction.response.send_message(clip(format_roster(team)), ephemeral=False)
 
-    @tree.command(name="recent", description="Recent official matches from the BBC OpenDota cache", guild=guild)
-    @app_commands.describe(team="Team name")
-    @app_commands.autocomplete(team=team_autocomplete)
-    @gate
-    async def recent_cmd(interaction: discord.Interaction, team: str):
-        await interaction.response.defer()
-        await interaction.followup.send(clip(format_recent(team)))
+        @tree.command(name="recent", description="Recent official matches from the BBC OpenDota cache", guild=guild)
+        @app_commands.describe(team="Team name")
+        @app_commands.autocomplete(team=team_autocomplete)
+        @gate
+        async def recent_cmd(interaction: discord.Interaction, team: str):
+            await interaction.response.defer()
+            await interaction.followup.send(clip(format_recent(team)))
 
     async def post_report_command(interaction, team, vs, command_name):
         await interaction.response.defer(ephemeral=True)
         try:
-            meta = await render_snapshot_async(team, vs=vs)
+            meta = await render_snapshot_async(team, vs=vs, league=league)
             snap = load_snapshot(meta["id"])
             if snap is None:
                 raise RuntimeError("snapshot rendered but could not be loaded back")
@@ -519,7 +527,7 @@ def run():
     register_commands(tree, guild, channel_id)
     if extra_guild_id:
         register_commands(tree, discord.Object(id=int(extra_guild_id)), extra_channel_id,
-                          default_team=None)
+                          default_team=None, league="RD2L")
     startup_error = []
 
     @client.event
@@ -628,10 +636,12 @@ def load_medal_emoji_map():
     return data if isinstance(data, dict) else {}
 
 
-def _snapshot_argv(team, vs, out_dir):
+def _snapshot_argv(team, vs, out_dir, league=None):
     argv = [sys.executable, "-m", "scout.briefing_cli", "--team", team, "--out", str(out_dir)]
     if vs:
         argv += ["--vs", vs]
+    if league:
+        argv += ["--league", league]
     season = os.environ.get("TEAM_SCOUT_SEASON", "").strip()
     if season:
         argv += ["--season", season]
@@ -667,13 +677,13 @@ def _finish_snapshot(tmp_dir, stdout, returncode, stderr):
     return meta
 
 
-def render_snapshot(team, vs=None):
+def render_snapshot(team, vs=None, league=None):
     """Sync: run scout.briefing_cli as a subprocess (cwd = LD2L Scout,
     never shell=True, never inherited stdio), then move its output under
     cache/scout_briefings/<id>/. Returns the meta dict."""
     root = _team_scout_root()
     with tempfile.TemporaryDirectory(prefix="scout_snapshot_") as tmp:
-        argv = _snapshot_argv(team, vs, tmp)
+        argv = _snapshot_argv(team, vs, tmp, league=league)
         result = subprocess.run(
             argv, cwd=str(root), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             **_subprocess_extra_kwargs(),
@@ -681,11 +691,11 @@ def render_snapshot(team, vs=None):
         return _finish_snapshot(tmp, result.stdout, result.returncode, result.stderr)
 
 
-async def render_snapshot_async(team, vs=None):
+async def render_snapshot_async(team, vs=None, league=None):
     """Async twin of render_snapshot, same subprocess flags."""
     root = _team_scout_root()
     with tempfile.TemporaryDirectory(prefix="scout_snapshot_") as tmp:
-        argv = _snapshot_argv(team, vs, tmp)
+        argv = _snapshot_argv(team, vs, tmp, league=league)
         proc = await asyncio.create_subprocess_exec(
             *argv, cwd=str(root), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             **_subprocess_extra_kwargs(),

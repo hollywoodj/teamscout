@@ -7,7 +7,7 @@ Usage (run with cwd = the LD2L Scout checkout, since Team Scout's on-disk
 cache is resolved relative to the working directory):
 
     python -m scout.briefing_cli --team "Team Name" [--vs "Other Team"] \\
-        --out DIR [--season 53] [--emoji-map PATH]
+        --out DIR [--season 53] [--emoji-map PATH] [--league LD2L|RD2L]
 
 Writes DIR/briefing.json, DIR/wards.json, DIR/recon.json (each
 {"components": [...], "attachments": [filenames]}), any referenced PNG
@@ -46,6 +46,25 @@ def _load_json_map(path):
         return None
 
 
+LEAGUES = ("LD2L", "RD2L")
+
+
+def league_family(team_row):
+    """"RD2L" for RD2L division teams, else "LD2L" (the BBC league)."""
+    if team_row.get("rd2lId") or str(team_row.get("league") or "").upper().startswith("RD2L"):
+        return "RD2L"
+    return "LD2L"
+
+
+def restrict_to_league(payload, league):
+    """Copy of `payload` whose teams all belong to `league`, so a team name
+    shared by both leagues resolves to the one this server plays in."""
+    if not league:
+        return payload
+    teams = [row for row in payload.get("teams") or [] if league_family(row) == league]
+    return {**payload, "teams": teams}
+
+
 def _snapshot_id(team_key_value, vs_key_value, generated_at):
     digest = hashlib.sha1(f"{team_key_value}|{vs_key_value}|{generated_at}".encode("utf-8")).hexdigest()
     return digest[:12]
@@ -71,6 +90,8 @@ def build_arg_parser():
     parser.add_argument("--season", type=int, default=53, help="Team Scout season id (default 53)")
     parser.add_argument("--emoji-map", default=None, help="Path to a hero_id -> Discord emoji token JSON map")
     parser.add_argument("--medal-emoji-map", default=None, help="Path to a rank_tier -> Discord emoji token JSON map")
+    parser.add_argument("--league", choices=LEAGUES, default=None,
+                        help="Only resolve teams from this league (default: both)")
     return parser
 
 
@@ -94,6 +115,8 @@ def main(argv=None):
     if not payload:
         print(f"Team Scout returned no payload for season {args.season}", file=sys.stderr)
         return 1
+
+    payload = restrict_to_league(payload, args.league)
 
     try:
         briefing_page = build_briefing_page(payload, args.team, vs=args.vs,

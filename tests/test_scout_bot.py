@@ -170,6 +170,43 @@ class RegistrationTests(unittest.TestCase):
             self.assertEqual(scout_bot.report_team_names(rd2l),
                              ["Team Anony: Fun Police", "Turtle Duck"])
 
+    def test_report_autocomplete_is_locked_to_the_server_league(self):
+        from unittest import mock
+        rd2l = {"teams": [{"name": "Turtle Duck"}, {"name": "Team Anony: Fun Police"}]}
+        with mock.patch.object(scout_bot, "team_names", return_value=["Great Leap"]):
+            self.assertEqual(scout_bot.report_team_names(rd2l, league="LD2L"), ["Great Leap"])
+            self.assertEqual(scout_bot.report_team_names(rd2l, league="RD2L"),
+                             ["Turtle Duck", "Team Anony: Fun Police"])
+
+    def test_rd2l_server_renders_rd2l_reports_without_ld2l_feed_commands(self):
+        import asyncio
+        from types import SimpleNamespace
+        from unittest import mock
+        import discord
+        from discord import app_commands
+
+        client = discord.Client(intents=discord.Intents.default())
+        tree = app_commands.CommandTree(client)
+        rd2l = discord.Object(id=2)
+        scout_bot.register_commands(tree, rd2l, channel_id="222", default_team=None, league="RD2L")
+        self.assertEqual(sorted(c.name for c in tree.get_commands(guild=rd2l)),
+                         ["briefing", "scoutingreport"])
+        command = next(c for c in tree.get_commands(guild=rd2l) if c.name == "scoutingreport")
+        interaction = SimpleNamespace(channel_id=222, response=mock.AsyncMock(),
+                                      followup=mock.AsyncMock())
+        snap = {"briefing": {"components": [], "attachments": []}, "dir": ROOT}
+        with mock.patch.object(scout_bot, "render_snapshot_async", new_callable=mock.AsyncMock,
+                               return_value={"id": "05e833d7364f"}) as render, \
+             mock.patch.object(scout_bot, "load_snapshot", return_value=snap), \
+             mock.patch.object(scout_bot, "load_scout_env", return_value={"token": "test"}), \
+             mock.patch.object(scout_bot, "_post_replacing_briefing", return_value=({"id": "1"}, [])):
+            asyncio.run(command.callback(interaction, team="Team Anony: Fun Police"))
+        render.assert_awaited_once_with("Team Anony: Fun Police", vs=None, league="RD2L")
+
+    def test_snapshot_argv_passes_league(self):
+        argv = scout_bot._snapshot_argv("Team", None, Path("output"), league="RD2L")
+        self.assertEqual(argv[argv.index("--league") + 1], "RD2L")
+
     def test_second_guild_has_channel_scoped_report_and_requires_team(self):
         import asyncio
         from types import SimpleNamespace
@@ -182,7 +219,7 @@ class RegistrationTests(unittest.TestCase):
         home = discord.Object(id=1)
         rd2l = discord.Object(id=2)
         scout_bot.register_commands(tree, home, channel_id="111")
-        scout_bot.register_commands(tree, rd2l, channel_id="222", default_team=None)
+        scout_bot.register_commands(tree, rd2l, channel_id="222", default_team=None, league="RD2L")
         command = next(c for c in tree.get_commands(guild=rd2l)
                        if c.name == "scoutingreport")
         wrong_channel = SimpleNamespace(channel_id=111, response=mock.AsyncMock())
@@ -233,7 +270,7 @@ class RegistrationTests(unittest.TestCase):
              mock.patch.object(scout_bot, "_post_replacing_briefing",
                                return_value=({"id": "1"}, [])) as post:
             asyncio.run(command.callback(interaction))
-        render.assert_awaited_once_with("Team Anony: Fun Police", vs=None)
+        render.assert_awaited_once_with("Team Anony: Fun Police", vs=None, league="LD2L")
         post.assert_called_once()
         interaction.response.defer.assert_awaited_once_with(ephemeral=True)
         interaction.followup.send.assert_awaited_once()
